@@ -1820,6 +1820,7 @@ namespace PtoServer
                 if (kv.Key / 10 != wave) continue;
                 OrderEffect se = SpellOf(u.Card, wave);
                 if (se.Kind == OrderKind.None) continue;
+                if (u.HasAttackedThisWave && !se.Free) continue; // a non-Quick cast exhausts like an attack (HandleAttack rejects a used-up caster); only Quick/Free spells stay castable
                 int ay2 = kv.Key % 10;
                 bool grid; int tx, ty; double cscore;
                 // Wave-spells cast via op22 too, so they are also ceasefire-blocked in round 1.
