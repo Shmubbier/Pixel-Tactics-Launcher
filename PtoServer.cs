@@ -1620,8 +1620,11 @@ namespace PtoServer
                 if (b.Over || b.Active != bot.P) return null;
                 PlayerState ps = b.P[bot.P], hp = b.P[1 - bot.P];
                 if (ps.ActionsRemaining <= 0) return null;
-                move = BotChoose(BotEnumerateMoves(b, bot, ps, hp), b.BotDifficulty);
-                if (move != null) BotLogDecision(b, ps, hp, move);
+                int beam = 0, plies = 0;
+                if (b.BotDifficulty == 2) { beam = 8; plies = 3; move = BotSearchBest(b, bot, beam, plies); }      // Challenge: deepest/widest
+                else if (b.BotDifficulty == 1) { beam = 4; plies = 2; move = BotSearchBest(b, bot, beam, plies); } // Hard: shallower/narrower
+                else move = BotChoose(BotEnumerateMoves(b, bot, ps, hp), b.BotDifficulty);                        // Easy: unchanged (rank-band + lethal)
+                if (move != null) BotLogDecision(b, ps, hp, move, beam, plies);
                 if (move != null && BotSimCheckEnabled) preMoveClone = BotCloneState(b);
                 // Debug-only: plan a sequence with the beam search and log it next to the single-shot
                 // pick, without changing which move executes (that already happened above).
@@ -1687,7 +1690,7 @@ namespace PtoServer
 
         // Buffer one bot decision as a JSON fragment (state features + the chosen move's rank/score). The
         // win/loss label is appended when the battle ends. Called under _battleLock.
-        static void BotLogDecision(Battle b, PlayerState ps, PlayerState hp, BotMove m)
+        static void BotLogDecision(Battle b, PlayerState ps, PlayerState hp, BotMove m, int beam, int plies)
         {
             int myU = 0, opU = 0;
             foreach (var u in ps.Units.Values) if (u != null && !u.IsCorpse) myU++;
@@ -1697,7 +1700,8 @@ namespace PtoServer
                 + ",\"myU\":" + myU + ",\"opU\":" + opU + ",\"orbs\":" + ps.Orbs
                 + ",\"diff\":" + b.BotDifficulty + ",\"leader\":" + (ps.LeaderCard / 2)
                 + ",\"kind\":" + m.Kind + ",\"rank\":" + m.Rank + ",\"pool\":" + m.Pool
-                + ",\"top\":" + m.Top.ToString("0.#") + ",\"pick\":" + m.Score.ToString("0.#");
+                + ",\"top\":" + m.Top.ToString("0.#") + ",\"pick\":" + m.Score.ToString("0.#")
+                + ",\"beam\":" + beam + ",\"plies\":" + plies;
             (b.Training ?? (b.Training = new System.Collections.Generic.List<string>())).Add(rec);
         }
 
@@ -2518,6 +2522,91 @@ namespace PtoServer
                 Log("BOT SEQDEBUG: width=" + beamWidth + " depth=" + maxDepth + " elapsed=" + sw.Elapsed.TotalMilliseconds.ToString("F2") + "ms seq=[" + seq + "]");
             }
             return first;
+        }
+
+        // ---- bot lookahead: minimax search wired to Hard/Challenge tiers -------------------------
+        // Swap perspective so the side to move is always state.Mine (BotSimulateApply always treats
+        // c.Mine as the mover). Call this once right after simulating a move, before recursing into
+        // the next ply, so the next mover lines up with Mine/MineSlot again.
+        static void BotSwapSides(BotClonedState c)
+        {
+            var tmpP = c.Mine; c.Mine = c.Opp; c.Opp = tmpP;
+            var tmpS = c.MineSlot; c.MineSlot = c.OppSlot; c.OppSlot = tmpS;
+            c.Battle.Active = 1 - c.Battle.Active;
+        }
+
+        // Depth-limited minimax value of state.Mine-to-move, backed up through alternating plies.
+        // sign=+1 on a bot ply (beam-maximize over the top beamWidth candidates), sign=-1 on an
+        // opponent ply (single best-scored reply only - the opponent model is "plays its own
+        // top-scored heuristic move", not a full search). Leaf value is 0: the per-move scores
+        // accumulated along the way ARE the eval, there is no separate static evaluator.
+        static double BotSearchValue(BotClonedState state, int sign, int pliesLeft, int beamWidth)
+        {
+            if (pliesLeft <= 0) return 0;
+            var moves = BotEnumerateMoves(state.Battle, state.MineSlot, state.Mine, state.Opp);
+            if (moves.Count == 0) return 0;
+            moves.Sort((x, y) => y.Score.CompareTo(x.Score));
+            if (sign > 0)
+            {
+                double best = double.NegativeInfinity;
+                int take = Math.Min(beamWidth, moves.Count);
+                for (int i = 0; i < take; i++)
+                {
+                    var child = BotCloneCloned(state);
+                    BotSimulateApply(child, moves[i]);
+                    BotSwapSides(child);
+                    double v = moves[i].Score + BotSearchValue(child, -sign, pliesLeft - 1, beamWidth);
+                    if (v > best) best = v;
+                }
+                return best;
+            }
+            else
+            {
+                var m = moves[0];
+                var child2 = BotCloneCloned(state);
+                BotSimulateApply(child2, m);
+                BotSwapSides(child2);
+                return -m.Score + BotSearchValue(child2, -sign, pliesLeft - 1, beamWidth);
+            }
+        }
+
+        // Root of the minimax search: pick the bot's own next action by looking `plies` ahead
+        // (bot, opponent, bot, ...), beam-limited to `beamWidth` candidates per ply. Must be called
+        // under _battleLock (BotDoOneAction already holds it). Every candidate still comes from
+        // BotEnumerateMoves, so the returned move is always legal and dispatches through the real
+        // Handle* switch same as BotChoose's pick.
+        static BotMove BotSearchBest(Battle b, BattleSlot bot, int beamWidth, int plies)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var root = BotCloneState(b);
+            var moves = BotEnumerateMoves(root.Battle, root.MineSlot, root.Mine, root.Opp);
+            if (moves.Count == 0) return null;
+            moves.Sort((x, y) => y.Score.CompareTo(x.Score));
+            BotMove picked;
+            if (moves[0].Score >= 800) // guaranteed win: take it now, no lookahead needed (see BotChoose)
+            {
+                moves[0].Rank = 0; moves[0].Pool = moves.Count; moves[0].Top = moves[0].Score;
+                picked = moves[0];
+            }
+            else
+            {
+                int take = Math.Min(beamWidth, moves.Count);
+                double bestV = double.NegativeInfinity;
+                int bestI = 0;
+                for (int i = 0; i < take; i++)
+                {
+                    var child = BotCloneCloned(root);
+                    BotSimulateApply(child, moves[i]);
+                    BotSwapSides(child);
+                    double v = moves[i].Score + BotSearchValue(child, -1, plies - 1, beamWidth);
+                    if (v > bestV) { bestV = v; bestI = i; }
+                }
+                picked = moves[bestI];
+                picked.Rank = bestI; picked.Pool = moves.Count; picked.Top = moves[0].Score;
+            }
+            sw.Stop();
+            Log("BOT SEARCH: diff=" + b.BotDifficulty + " beam=" + beamWidth + " plies=" + plies + " cand=" + moves.Count + " elapsed=" + sw.Elapsed.TotalMilliseconds.ToString("F1") + "ms pick=" + picked.Desc);
+            return picked;
         }
 
         // ---- bot lookahead self-check (debug only, env-gated) ------------------------------------
