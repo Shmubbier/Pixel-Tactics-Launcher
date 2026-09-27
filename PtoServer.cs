@@ -1269,6 +1269,7 @@ namespace PtoServer
             public bool RestructureFree; // this turn, MOVE and CLEAR CORPSE cost no action (Homunculus/Bannerman); cleared at end of your turn
             public bool OrderedThisTurn; // has an order been played this turn (for Tatsumi's first-order-per-turn passive)
             public bool LukasTriggeredThisTurn; // Lukas: has the first Trap/Ongoing/Order bonus-summon fired this turn
+            public bool KhadathBanishedThisTurn; // Khadath: Banish is once per turn, server-enforced
             public int LeaderPermStr;    // Star Knight Iri: +1 leader attack per own hero defeated (persistent)
             public int RoundStrBonus;    // Magdelina: +1 to all your heroes + leader each round (persistent, stacks)
             public bool IsFirstPlayer;   // holds the first-player token this round (for Kallistar's conditional aura)
@@ -2567,7 +2568,8 @@ namespace PtoServer
                          TrapCancelAttack, TrapCancelSpell, TrapCancelOrder,
                          Immortality, Restructure, DamageSpread,
                          Reload, MindControl, Duplicate, Transfusion, Enervate, Entomb, ForceCube,
-                         ResurrectAll, Phantom, Scry, LucHaste, GrantRanged, ShieldRear }
+                         ResurrectAll, Phantom, Scry, LucHaste, GrantRanged, ShieldRear,
+                         DamageRowRandom, DamageColumnRandom }
 
         // Kind2/Amount2 = an optional RIDER: a second effect the same order/spell fires on the same target
         // right after the primary (e.g. Warrior "Cure 4, Strength Buff 2"). The rider never costs its own action.
@@ -2582,7 +2584,7 @@ namespace PtoServer
                 case 26: return new OrderEffect { Kind = OrderKind.DamageColumn, Amount = 5 }; // Fighter: Thunder 5 (column)
                 case 28: return new OrderEffect { Kind = OrderKind.DamageRandom, Amount = 8 }; // Berserker: Bombard 8 (random hero)
                 case 30: return new OrderEffect { Kind = OrderKind.DamageAll,    Amount = 3 }; // Alchemist: Poison 3 (official: X to ALL rival heroes)
-                case 31: return new OrderEffect { Kind = OrderKind.DamageRow,    Amount = 5 }; // Gunner: Bombard Row 5 (a row)
+                case 31: return new OrderEffect { Kind = OrderKind.DamageRowRandom,    Amount = 5 }; // Gunner: Bombard Row 5 (a RANDOM row, not player-targeted)
                 case 32: return new OrderEffect { Kind = OrderKind.HealAll,      Amount = 4 }; // Healer: Cure All 4
                 case 29: return new OrderEffect { Kind = OrderKind.KillHero };                  // Assassin: Assassinate
                 case 34: return new OrderEffect { Kind = OrderKind.WildSummon }; // Illusionist: Wild Summon (play a random card from the rival's hand as an order, then discard it)
@@ -2592,7 +2594,7 @@ namespace PtoServer
                 case 42: return new OrderEffect { Kind = OrderKind.Resurrect };                // Priestess: Resurrect
                 case 44: return new OrderEffect { Kind = OrderKind.GainActions,  Amount = 2, Free = true }; // Scientist: Haste 2 (free)
                 case 50: return new OrderEffect { Kind = OrderKind.RaiseDead,    Amount = 3 }; // Witch: Raise Dead x3
-                case 41: return new OrderEffect { Kind = OrderKind.DamageColumn, Amount = 5 }; // Planestalker: Bombard Column 5
+                case 41: return new OrderEffect { Kind = OrderKind.DamageColumnRandom, Amount = 5 }; // Planestalker: Bombard Column 5 (a RANDOM column, not player-targeted)
                 case 43: return new OrderEffect { Kind = OrderKind.DamageRow,    Amount = 5 }; // Pyromancer: Fire 5
                 case 52: return new OrderEffect { Kind = OrderKind.DamageRow,    Amount = 4 }; // Fire Elemental: Fire 4
                 case 53: return new OrderEffect { Kind = OrderKind.HealSingle,   Amount = 5 }; // Water Elemental: Cure 5
@@ -3074,6 +3076,21 @@ namespace PtoServer
                     break;
                 case OrderKind.DamageColumn:   // fixed gx, all gy
                     for (int cy = 0; cy <= 2; cy++) DamageEnemyAt(opPs, gx, cy, eff.Amount);
+                    break;
+                case OrderKind.DamageRowRandom: // Bombard Row: a RANDOMLY selected row, not player-aimed
+                    {
+                        int ry; lock (_rng) ry = _rng.Next(3);
+                        for (int cx = 0; cx <= 2; cx++) DamageEnemyAt(opPs, cx, ry, eff.Amount);
+                        // Aim the fire visual at the resolved row (there's no player click to reuse).
+                        gx = 1; enemyGy = ry;
+                    }
+                    break;
+                case OrderKind.DamageColumnRandom: // Bombard Column: a RANDOMLY selected column/wave, not player-aimed
+                    {
+                        int rx; lock (_rng) rx = _rng.Next(3);
+                        for (int cy = 0; cy <= 2; cy++) DamageEnemyAt(opPs, rx, cy, eff.Amount);
+                        gx = rx; enemyGy = 1;
+                    }
                     break;
                 case OrderKind.DamageBlast:    // (legacy) target + its column-neighbours
                     DamageEnemyAt(opPs, gx, enemyGy, eff.Amount);
@@ -3745,7 +3762,7 @@ namespace PtoServer
                 //      Leader REALs (0-25) never collide with hero REALs (26+). ----
                 case 12: return new OrderEffect { Kind = OrderKind.Inspire };                    // Borneo: Spell: Inspire (f_spell=1, castable in the Flank wave)
                 case 19: return new OrderEffect { Kind = OrderKind.LucHaste, Free = true };      // Luc Von Gott: apply 1 dmg to leader, gain 2 actions
-                case 21: return new OrderEffect { Kind = OrderKind.Banish, Amount = 1 };         // Khadath: Banish 1 (once/turn, client-gated)
+                case 21: return new OrderEffect { Kind = OrderKind.Banish, Amount = 1 };         // Khadath: Banish 1 (once/turn, server-gated via KhadathBanishedThisTurn)
                 case 23: return new OrderEffect { Kind = OrderKind.RaiseDead, Amount = 3 };      // Hepzibah: cast Raise Dead
                 // ---- gen-2 leader actives (same isSpell path; f_spell=4/5 makes the client always offer the
                 //      cast). Mapped to existing effects; extra rider costs/bonuses applied in the ax==1&&ay==1 block below.
@@ -4313,6 +4330,16 @@ namespace PtoServer
                     if (q0 != null && q1 != null) SyncUnitStates(q0, q1, b);
                     return;
                 }
+                // Khadath: Banish is "once per turn" per the card text; the client is supposed to gate the
+                // second cast but the server must be authoritative. Reject (refund, no-op) a repeat.
+                if (casterCard / 2 == 21 && ps.KhadathBanishedThisTurn)
+                {
+                    Log("  -> SPELL rejected: Khadath's Banish is once per turn (already used)");
+                    GrantAction(mine);
+                    BattleSlot q0 = mine.P == 0 ? mine : theirs, q1 = mine.P == 0 ? theirs : mine;
+                    if (q0 != null && q1 != null) SyncUnitStates(q0, q1, b);
+                    return;
+                }
                 // A hero's action wave-spell EXHAUSTS it for the wave, exactly like an attack: once a hero
                 // has acted (attacked or cast a non-Quick spell) it cannot act again this wave, so clicking
                 // Spell greys it out just like Attack. Quick spells (seff.Free) never exhaust and are never
@@ -4387,6 +4414,9 @@ namespace PtoServer
                 {
                     switch (ps.LeaderCard / 2)
                     {
+                        case 21: // Khadath: Banish is once per turn, mark it used
+                            ps.KhadathBanishedThisTurn = true;
+                            break;
                         case 70: // Merjoram: "Give a HERO shield, then lose 2 life."
                             ps.LeaderLife = Math.Max(0, ps.LeaderLife - 2); SendLeaderHp(mine, theirs, ps);
                             Log("  LEADER (Merjoram): -2 leader life (now " + ps.LeaderLife + ")");
@@ -4768,6 +4798,18 @@ namespace PtoServer
                 Log("BATTLE END: " + mine.Me.User + " wins");
                 SendBattleEnd(b, mine.Me, theirs != null ? theirs.Me : null);
                 return;
+            }
+
+            // Re-sync auras: the attack (or a counter-attack) may have just killed a hero that was
+            // granting an aura (RangedAttack/Counter/Reflect/DoubleAttack/RImmunity/Deathproof/Intercept/
+            // Strength/Armor) to a neighbour. Without this, the recipient keeps the stale ability on both
+            // server (u.Abilities) and client (last-sent buff byte) until some unrelated action resyncs.
+            // Mirrors the same both-player RecomputeAuras + full-board SyncUnitStates idiom ResolveEffect
+            // uses at its own end.
+            RecomputeAuras(ps); RecomputeAuras(opPs);
+            {
+                BattleSlot q0 = mine.P == 0 ? mine : theirs, q1 = mine.P == 0 ? theirs : mine;
+                if (q0 != null && q1 != null) SyncUnitStates(q0, q1, b);
             }
 
             // Swift (official) only lets a hero act the turn it's summoned (summon-sickness bypass handled
@@ -5483,7 +5525,7 @@ namespace PtoServer
             Send(p0.Me.Ns, new PacketWriter().WriteU16((ushort)(active == 0 ? 0 : 1)).WriteBool(true).Frame(Op.TurnGet));
             Send(p1.Me.Ns, new PacketWriter().WriteU16((ushort)(active == 1 ? 0 : 1)).WriteBool(true).Frame(Op.TurnGet));
             BattleSlot act = active == 0 ? p0 : p1;
-            if (act.Battle != null) { act.Battle.P[active].OrderedThisTurn = false; act.Battle.P[active].LukasTriggeredThisTurn = false; } // reset Tatsumi + Lukas per-turn trackers
+            if (act.Battle != null) { act.Battle.P[active].OrderedThisTurn = false; act.Battle.P[active].LukasTriggeredThisTurn = false; act.Battle.P[active].KhadathBanishedThisTurn = false; } // reset Tatsumi + Lukas + Khadath per-turn trackers
             GrantAction(act);
             // Any corpse alive at a turn boundary has finished its death animation client-side, so it's
             // now safe (and necessary) to re-send it, mark it settled so SyncUnitStates re-greys it.
