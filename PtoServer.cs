@@ -1304,6 +1304,11 @@ namespace PtoServer
             public bool WasRanged;          // client already knows this unit is ranged; fire the gain effect only on false->true
             public int MarkedWave = -1;     // Pendros: overrides the wave used for this unit's abilities (-1 = use its cell)
             public int BotAggro;            // AI target priority: raised when this (enemy) hero attacks the bot or the bot attacks it; decays each bot turn
+
+            // All fields above are value types, so a MemberwiseClone is a true independent copy (no
+            // aliasing). Used by BotClonePlayerState for the bot's simulate-state lookahead infra.
+            // object.MemberwiseClone() is protected, so this wrapper is needed to call it from Program.
+            public BUnit Clone() { return (BUnit)MemberwiseClone(); }
         }
 
         // What a Cover:X unit protects. It takes damage that would land on the covered position.
@@ -1609,6 +1614,7 @@ namespace PtoServer
         {
             Battle b = bot.Battle;
             BotMove move;
+            BotClonedState preMoveClone = null; // PTO_BOT_SIMCHECK only; null (no-op) otherwise
             lock (_battleLock)
             {
                 if (b.Over || b.Active != bot.P) return null;
@@ -1616,6 +1622,7 @@ namespace PtoServer
                 if (ps.ActionsRemaining <= 0) return null;
                 move = BotChoose(BotEnumerateMoves(b, bot, ps, hp), b.BotDifficulty);
                 if (move != null) BotLogDecision(b, ps, hp, move);
+                if (move != null && BotSimCheckEnabled) preMoveClone = BotCloneState(b);
             }
             if (move == null) return null;
             switch (move.Kind) // handlers spend the action + enforce legality, so a bad pick can't cheat
@@ -1628,6 +1635,13 @@ namespace PtoServer
                 case 6: Log("BOT: reserve " + move.Desc);       HandleSummon(bot.Me.Ns, move.Payload);      break; // trap/operation to grid_x=3
                 case 7: Log("BOT: spell " + move.Desc);         HandleAttack(bot.Me.Ns, move.Payload);      break; // isSpell path
                 default: return null;
+            }
+            // Debug-only self-check: never affects the move above, which already committed via the real
+            // handler. See BotSimCheckCompare for what is (and isn't) compared and why a mismatch never throws.
+            if (preMoveClone != null)
+            {
+                BotSimulateApply(preMoveClone, move);
+                lock (_battleLock) BotSimCheckCompare(b, bot.P, preMoveClone, move);
             }
             return move;
         }
@@ -2144,6 +2158,341 @@ namespace PtoServer
                 case OrderKind.Scry:        grid = true; score = 30;  return true;
                 default: return false; // SummonRandom/WildSummon/Swap/Polymorph/Copycat/Replicate/Duplicate/... deferred
             }
+        }
+
+        // ---- bot lookahead: simulate-state infra (no live-path behavior change) -----------------
+        // Later tasks add search (opponent-reply penalty, own-turn beam, shallow minimax) on top of this.
+        // Every one of them needs "what would the board look like after move X" without touching the
+        // live Battle or sending anything over the network. BotCloneState + BotSimulateApply are that,
+        // and nothing else: the live decision in BotDoOneAction still calls
+        // BotChoose(BotEnumerateMoves(...)) exactly as before, unchanged.
+        //
+        // Minimal state slice the heuristic reads (verified by grep against BotEnumerateMoves,
+        // BotAddAttack, BotPlanEffect, BotLogDecision and every Bot* helper they call, 2026-09-28).
+        // If PlayerState/BUnit gain a new field one of those functions reads, add it here too, or a
+        // clone will silently score a stale position:
+        //   PlayerState: Units (dict of BUnit), Orbs, LeaderLife, LeaderMax, LeaderAbilities,
+        //                LeaderArmorBonus, LeaderCard, Deck (COUNT only), TrapAttackLane, TrapSpellLane,
+        //                TrapOrderLane, ImmortalLane, Ongoing (each entry's Lane only).
+        //   Hand: lives on BattleSlot, not PlayerState (bot.Hand) - cloned alongside its owning player.
+        //   BUnit: Atk, Max, Damage, Strength, TempStrength, Armor, Abilities, IsCorpse, BotAggro,
+        //          HasAttackedThisWave, RecruitedThisWave.
+        //   Battle: Round, Wave, Active.
+        // Everything else on PlayerState/BUnit/Battle (Discard, PhantomCards, Shield, Silenced, Cover,
+        // aura bonuses recomputed by RecomputeAuras, etc.) is real-handler-only and never read by the
+        // heuristic, so it is left at its PlayerState/BUnit default in the clone.
+
+        // A cloned, fully independent copy of one Battle position: no shared BUnit references, no shared
+        // dictionaries or lists with the live game, so mutating it (BotSimulateApply) can never touch the
+        // live board. Mine/MineSlot are the position's active player (matches Battle.Active at clone time,
+        // i.e. the bot deciding); Opp/OppSlot is the other side. Task 3+ re-enters BotEnumerateMoves against
+        // this by passing (Battle, MineSlot, Mine, Opp) or the swapped (Battle, OppSlot, Opp, Mine).
+        class BotClonedState
+        {
+            public Battle Battle;
+            public PlayerState Mine, Opp;
+            public BattleSlot MineSlot, OppSlot; // only .Hand (and .P) is populated; nothing else is read
+        }
+
+        // Deep-enough copy of one PlayerState for the heuristic: a new Units dictionary holding a
+        // BUnit.Clone() of each unit (BUnit has only value-type fields, so the clone never aliases the
+        // source), the scalar fields the heuristic reads, Ongoing copied by value (it's a struct list),
+        // and Deck copied as COUNT-only placeholders (identity of the remaining cards is never read by
+        // the heuristic).
+        static PlayerState BotClonePlayerState(PlayerState src)
+        {
+            var p = new PlayerState();
+            foreach (var kv in src.Units)
+                p.Units[kv.Key] = kv.Value == null ? null : kv.Value.Clone();
+            p.Orbs = src.Orbs;
+            p.LeaderLife = src.LeaderLife;
+            p.LeaderMax = src.LeaderMax;
+            p.LeaderAbilities = src.LeaderAbilities;
+            p.LeaderArmorBonus = src.LeaderArmorBonus;
+            p.LeaderCard = src.LeaderCard;
+            p.TrapAttackLane = src.TrapAttackLane;
+            p.TrapSpellLane = src.TrapSpellLane;
+            p.TrapOrderLane = src.TrapOrderLane;
+            p.ImmortalLane = src.ImmortalLane;
+            p.Ongoing = new List<OngoingOp>(src.Ongoing);
+            int deckCount = src.Deck != null ? src.Deck.Count : 0;
+            p.Deck = new List<ushort>(new ushort[deckCount]); // count-only placeholder, see comment above
+            return p;
+        }
+
+        // Deep-clone the current position of Battle b into an independent BotClonedState. "Mine" is
+        // whichever player currently has the turn (Battle.Active), matching the bot's own perspective at
+        // the point BotDoOneAction calls this. Must be called under _battleLock (same lock BotDoOneAction
+        // already holds while choosing a move) since it reads b.P[] and scans the shared _battles map for
+        // each side's hand.
+        static BotClonedState BotCloneState(Battle b)
+        {
+            var clone = new BotClonedState();
+            clone.Battle = new Battle { Round = b.Round, Wave = b.Wave, Active = b.Active };
+            clone.Mine = BotClonePlayerState(b.P[b.Active]);
+            clone.Opp = BotClonePlayerState(b.P[1 - b.Active]);
+
+            // Hand lives on BattleSlot, not PlayerState (see comment block above), so find each side's
+            // slot by matching Battle reference + player index. _battles holds every connected player's
+            // slot (bot slots keyed by ns=null), not just this battle's two, hence the Battle-reference
+            // filter. ponytail: linear scan over all connections; fine at hobby scale for one clone per
+            // real bot action (this task's only call site) - if a later task's per-node search calls this
+            // heavily, thread the two hands in as parameters instead of scanning here.
+            List<ushort> mineHand = null, oppHand = null;
+            foreach (var slot in _battles.Values)
+            {
+                if (slot.Battle != b) continue;
+                if (slot.P == b.Active) mineHand = slot.Hand; else oppHand = slot.Hand;
+            }
+            clone.MineSlot = new BattleSlot { P = b.Active, Hand = mineHand != null ? new List<ushort>(mineHand) : new List<ushort>() };
+            clone.OppSlot = new BattleSlot { P = 1 - b.Active, Hand = oppHand != null ? new List<ushort>(oppHand) : new List<ushort>() };
+            return clone;
+        }
+
+        // Apply the STATE EFFECT of one already-scored BotMove directly to a clone's fields: no Handle*
+        // call, no network I/O. This deliberately re-implements only the fields the heuristic reads (see
+        // the comment block above), mirroring the same math BotAddAttack/BotPlanEffect already used to
+        // SCORE the move, not the full fidelity of ResolveEffect/Handle*. Where a move kind is too complex
+        // to model faithfully here, it is approximated or skipped and documented inline; the move that
+        // actually gets executed still goes through the real handler at full fidelity, this only feeds a
+        // deeper ply's heuristic score. Never touches the live Battle: c is always a BotClonedState.
+        static void BotSimulateApply(BotClonedState c, BotMove m)
+        {
+            if (m == null) return;
+            if (m.Kind == 3) { BotSimDraw(c); return; }               // draw has no Payload; no deaths possible
+            if (m.Kind != 7 && m.Payload != null)
+            {
+                switch (m.Kind)
+                {
+                    case 1: BotSimSummon(c, m.Payload); break;
+                    case 2: BotSimAttack(c, m.Payload); break;
+                    case 4: BotSimClearCorpse(c, m.Payload); break;
+                    case 5: BotSimOrder(c, m.Payload); break;
+                    case 6: BotSimReserve(c, m.Payload); break;
+                }
+            }
+            // Kind 7 (leader active / unit wave-spell, both cast via op22): the compact payload encodes
+            // casterX/Y as bytes 2,3, but the leader always hardcodes (1,1) there while a unit wave-spell
+            // cast from wave=1,row=1 encodes the SAME bytes, so which OrderEffect fired can't be
+            // recovered from the payload alone. Approximated as a no-op; per the brief this is an
+            // acceptable documented mismatch (summon/attack/draw, the bulk of bot moves, are exact).
+
+            // The real server converts any unit at lethal damage to a corpse (Damage reset to 0)
+            // IMMEDIATELY after the action resolves (ProcessImmediateDeaths), not just at wave end -
+            // so a unit that crossed 0 life this move must not sit around "alive" with Damage>=Max in
+            // the clone, or myU/opU and that unit's Damage would both drift from the real board on the
+            // very next self-check. Approximation: skips the Immortal-vanguard/Ephemeral special cases
+            // (ProcessImmediateDeaths' rarer branches); a plain kill is exact.
+            BotSimProcessDeaths(c.Mine);
+            BotSimProcessDeaths(c.Opp);
+        }
+
+        // See BotSimulateApply's comment: the common-case equivalent of ProcessImmediateDeaths.
+        static void BotSimProcessDeaths(PlayerState side)
+        {
+            foreach (var u in side.Units.Values)
+                if (u != null && !u.IsCorpse && u.Damage >= u.Max) { u.IsCorpse = true; u.Damage = 0; }
+        }
+
+        // Payload: { 0, wave, col, handIndex }, matches BotEnumerateMoves' Kind=1 summon candidates.
+        // Approximation: skips RecomputeAuras (the real handler's board-wide leader/neighbor aura
+        // recompute) and the Phantom-card printed-life-1 override. Neither changes the fields the
+        // self-check diffs (unit count, per-unit Damage, leader life); Atk/Armor/Strength come straight
+        // from the same GetUnitX passive lookups HandleSummon itself uses, so they stay correct too.
+        static void BotSimSummon(BotClonedState c, byte[] p)
+        {
+            int wave = p[1], col = p[2], h = p[3];
+            if (h < 0 || h >= c.MineSlot.Hand.Count) return; // stale payload, nothing to simulate
+            ushort card = c.MineSlot.Hand[h];
+            var unit = new BUnit
+            {
+                Card = card,
+                Atk = AtkOf(card) + GetUnitStrength(card, wave),
+                Max = LifeOf(card),
+                Armor = GetUnitArmor(card, wave),
+                Strength = GetUnitStrength(card, wave),
+                Abilities = GetUnitAbilities(card, wave),
+                RecruitedThisWave = true,
+            };
+            c.Mine.Units[Key(wave, col)] = unit;
+            c.MineSlot.Hand.RemoveAt(h);
+        }
+
+        // Payload: { 0, 0, attackWave, attackLane, targetWave, targetLane }, matches BotAddAttack's
+        // Kind=2 candidates. (1,1) is always the leader cell (units can never be summoned there), so no
+        // ambiguity between a leader hit and a unit hit. Mirrors BotAddAttack's own damage math exactly
+        // (raw = heroKiller ? atk*2 : atk; dmg = max(0, raw - armor)) rather than the full Handle*
+        // pipeline (no Shield/Vamp/Mercy/Counter/Reflect/Andrus), same "correctness for the common case"
+        // trade-off the scoring function itself already makes.
+        static void BotSimAttack(BotClonedState c, byte[] p)
+        {
+            int aw = p[2], al = p[3], tw = p[4], tl = p[5];
+            BUnit attacker;
+            if (!c.Mine.Units.TryGetValue(Key(aw, al), out attacker) || attacker == null) return;
+            int atk = attacker.Atk + attacker.Strength + attacker.TempStrength;
+            bool heroKiller = (attacker.Abilities & UnitAbility.HeroKiller) != 0;
+            int raw = heroKiller ? atk * 2 : atk;
+            attacker.HasAttackedThisWave = true;
+
+            if (tw == 1 && tl == 1)
+            {
+                int dmg = Math.Max(0, raw - c.Opp.LeaderArmorBonus);
+                c.Opp.LeaderLife = Math.Max(0, c.Opp.LeaderLife - dmg);
+                return;
+            }
+            BUnit t;
+            if (!c.Opp.Units.TryGetValue(Key(tw, tl), out t) || t == null) return;
+            BotSimDamageUnit(t, Math.Max(0, raw - t.Armor));
+        }
+
+        // Draw has no Payload (BotEnumerateMoves' Kind=3 candidate carries only a score/desc). Only the
+        // hand/deck COUNT is modeled; the drawn card's identity is chance- and deck-order-dependent and
+        // the self-check never compares hand contents, only unit/leader/Damage fields.
+        static void BotSimDraw(BotClonedState c)
+        {
+            if (c.Mine.Deck.Count == 0) return;
+            c.Mine.Deck.RemoveAt(c.Mine.Deck.Count - 1);
+            c.MineSlot.Hand.Insert(0, 0);
+        }
+
+        // Payload: { cx, cy }, matches BotEnumerateMoves' Kind=4 clear-corpse candidates.
+        static void BotSimClearCorpse(BotClonedState c, byte[] p)
+        {
+            c.Mine.Units.Remove(Key(p[0], p[1]));
+        }
+
+        // Payload: { handIndex, grid, tx, ty, cardLo, cardHi }, matches BotEnumerateMoves' Kind=5 order
+        // candidates (the card is embedded in the payload, so its OrderEffect is exactly recoverable,
+        // unlike Kind=7's spells). Only the OrderKinds BotPlanEffect scores as direct life/damage swings
+        // are modeled; the rest (debuffs, buffs, revive, utility) are documented no-ops in BotSimApplyEffect.
+        static void BotSimOrder(BotClonedState c, byte[] p)
+        {
+            if (p.Length < 6) return;
+            int h = p[0], tx = p[2], ty = p[3];
+            ushort card = (ushort)(p[4] | (p[5] << 8));
+            BotSimApplyEffect(c, OrderOf(card), tx, ty);
+            if (h >= 0 && h < c.MineSlot.Hand.Count && c.MineSlot.Hand[h] == card) c.MineSlot.Hand.RemoveAt(h);
+        }
+
+        // Payload: { 0, 3, lane, handIndex }, matches BotEnumerateMoves' Kind=6 reserve candidates.
+        // Approximation: only the hand removal is modeled; trap/ongoing lane bookkeeping is skipped since
+        // it never moves the self-check's diffed fields (unit count, leader life, per-unit Damage).
+        static void BotSimReserve(BotClonedState c, byte[] p)
+        {
+            int h = p[3];
+            if (h >= 0 && h < c.MineSlot.Hand.Count) c.MineSlot.Hand.RemoveAt(h);
+        }
+
+        // Shared by BotSimOrder for the OrderKinds BotPlanEffect scores as a direct life/damage swing.
+        // AoE kinds (Row/Column/Blast/All/Random/FrontEach/Spread) apply a flat "amt" to every living
+        // enemy unit as a conservative approximation of their real per-shape targeting. Everything else
+        // (Silence/Enervate/Entomb/Unsummon/MindControl/Backlash, the self-buffs, Revive family, and the
+        // fire-and-forget utility kinds) is a documented no-op: none of them are in "the bulk of bot moves"
+        // the brief requires exact for, so a mismatch there is the acceptable, documented slop.
+        static void BotSimApplyEffect(BotClonedState c, OrderEffect eff, int tx, int ty)
+        {
+            int amt = eff.Amount;
+            switch (eff.Kind)
+            {
+                case OrderKind.DamageSingle:
+                case OrderKind.DamageIce:
+                    BotSimDamageUnitAt(c.Opp, tx, ty, amt); break;
+                case OrderKind.DamageLeader:
+                    c.Opp.LeaderLife = Math.Max(0, c.Opp.LeaderLife - amt); break;
+                case OrderKind.KillHero:
+                case OrderKind.Takedown:
+                case OrderKind.FinisherKill:
+                    // Damage set to Max, not IsCorpse directly: BotSimulateApply's death sweep (right
+                    // after this returns) is what converts it to a corpse and resets Damage to 0, same
+                    // as it does for a lethal attack, so both paths share one place that matches the
+                    // real ProcessImmediateDeaths behavior.
+                    { BUnit t; if (c.Opp.Units.TryGetValue(Key(tx, ty), out t) && t != null) t.Damage = t.Max; }
+                    break;
+                case OrderKind.DamageRow:
+                case OrderKind.DamageColumn:
+                case OrderKind.DamageBlast:
+                case OrderKind.DamageAll:
+                case OrderKind.DamageRandom:
+                case OrderKind.DamageFrontEach:
+                case OrderKind.DamageSpread:
+                    foreach (var u in c.Opp.Units.Values) if (u != null && !u.IsCorpse) BotSimDamageUnit(u, amt);
+                    break;
+                case OrderKind.HealSingle:
+                    { BUnit u; if (c.Mine.Units.TryGetValue(Key(tx, ty), out u) && u != null) u.Damage = Math.Max(0, u.Damage - amt); }
+                    break;
+                case OrderKind.HealAll:
+                    // Real HealAll (see ResolveEffect) heals the leader too, not just units.
+                    foreach (var u in c.Mine.Units.Values) if (u != null && !u.IsCorpse) u.Damage = Math.Max(0, u.Damage - amt);
+                    c.Mine.LeaderLife = Math.Min(c.Mine.LeaderMax, c.Mine.LeaderLife + amt);
+                    break;
+                case OrderKind.HealLeader:
+                    c.Mine.LeaderLife = Math.Min(c.Mine.LeaderMax, c.Mine.LeaderLife + amt); break;
+                default: break; // documented no-op, see comment above
+            }
+        }
+
+        static void BotSimDamageUnitAt(PlayerState side, int x, int y, int amt)
+        {
+            BUnit u;
+            if (side.Units.TryGetValue(Key(x, y), out u) && u != null) BotSimDamageUnit(u, amt);
+        }
+
+        static void BotSimDamageUnit(BUnit u, int amt)
+        {
+            // Just accumulates damage; BotSimulateApply's death sweep (run once, after whichever case
+            // ran) is what converts a lethal hit into a corpse and resets Damage to 0.
+            u.Damage += Math.Max(0, amt);
+        }
+
+        // ---- bot lookahead self-check (debug only, env-gated) ------------------------------------
+        // PTO_BOT_SIMCHECK=1 turns on a per-real-action comparison: clone the position right before the
+        // bot's chosen move commits, run the SAME move through BotSimulateApply, then diff the clone
+        // against the real post-move Battle. Costs nothing when unset (the env var is read once at
+        // startup); never throws (wrapped in try/catch) - a mismatch is only ever a logged warning, and
+        // it never changes which move the bot picked (BotDoOneAction's decision path above is untouched).
+        static readonly bool BotSimCheckEnabled = Environment.GetEnvironmentVariable("PTO_BOT_SIMCHECK") == "1";
+
+        static int BotAliveCount(PlayerState ps)
+        {
+            int n = 0;
+            foreach (var u in ps.Units.Values) if (u != null && !u.IsCorpse) n++;
+            return n;
+        }
+
+        // Compare a pre-move clone (already advanced one move via BotSimulateApply) against the real
+        // Battle after that same move committed through its real handler. Only checks the fields the
+        // heuristic actually scores off of (myU/opU/myLead/opLead, each unit's Damage) - anything else
+        // drifting (hand contents, auras, ability flags) is out of scope for this self-check. Must run
+        // under _battleLock, same as BotCloneState.
+        static void BotSimCheckCompare(Battle b, int botP, BotClonedState pre, BotMove move)
+        {
+            try
+            {
+                if (b.Over || b.Active != botP) return; // turn moved on (or battle ended); nothing to compare
+                PlayerState realMine = b.P[botP], realOpp = b.P[1 - botP];
+                var bad = new List<string>();
+                int simMyU = BotAliveCount(pre.Mine), realMyU = BotAliveCount(realMine);
+                int simOpU = BotAliveCount(pre.Opp), realOpU = BotAliveCount(realOpp);
+                if (simMyU != realMyU) bad.Add("myU sim=" + simMyU + " real=" + realMyU);
+                if (simOpU != realOpU) bad.Add("opU sim=" + simOpU + " real=" + realOpU);
+                if (pre.Mine.LeaderLife != realMine.LeaderLife) bad.Add("myLead sim=" + pre.Mine.LeaderLife + " real=" + realMine.LeaderLife);
+                if (pre.Opp.LeaderLife != realOpp.LeaderLife) bad.Add("opLead sim=" + pre.Opp.LeaderLife + " real=" + realOpp.LeaderLife);
+                foreach (var kv in realMine.Units)
+                {
+                    BUnit simU;
+                    if (kv.Value != null && pre.Mine.Units.TryGetValue(kv.Key, out simU) && simU != null && simU.Damage != kv.Value.Damage)
+                        bad.Add("mine(" + (kv.Key / 10) + "," + (kv.Key % 10) + ") dmg sim=" + simU.Damage + " real=" + kv.Value.Damage);
+                }
+                foreach (var kv in realOpp.Units)
+                {
+                    BUnit simU;
+                    if (kv.Value != null && pre.Opp.Units.TryGetValue(kv.Key, out simU) && simU != null && simU.Damage != kv.Value.Damage)
+                        bad.Add("opp(" + (kv.Key / 10) + "," + (kv.Key % 10) + ") dmg sim=" + simU.Damage + " real=" + kv.Value.Damage);
+                }
+                if (bad.Count > 0)
+                    Log("BOT SIM MISMATCH: kind=" + move.Kind + " " + move.Desc + " -> " + string.Join("; ", bad));
+            }
+            catch (Exception ex) { Log("BOT SIM MISMATCH: check itself threw: " + ex.Message); }
         }
 
         // ---- battle setup + mulligan ------------------------------------------
