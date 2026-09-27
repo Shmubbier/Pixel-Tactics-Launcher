@@ -1626,13 +1626,6 @@ namespace PtoServer
                 else move = BotChoose(BotEnumerateMoves(b, bot, ps, hp), b.BotDifficulty);                        // Easy: unchanged (rank-band + lethal)
                 if (move != null) BotLogDecision(b, ps, hp, move, beam, plies);
                 if (move != null && BotSimCheckEnabled) preMoveClone = BotCloneState(b);
-                // Debug-only: plan a sequence with the beam search and log it next to the single-shot
-                // pick, without changing which move executes (that already happened above).
-                if (move != null && BotSeqDebugEnabled)
-                {
-                    BotMove plannedFirst = BotPlanSequence(b, bot, 8, 3);
-                    Log("BOT SEQDEBUG: single-shot=" + move.Desc + " planned-first=" + (plannedFirst != null ? plannedFirst.Desc : "(none)"));
-                }
             }
             if (move == null) return null;
             switch (move.Kind) // handlers spend the action + enforce legality, so a bad pick can't cheat
@@ -2469,59 +2462,6 @@ namespace PtoServer
             // Just accumulates damage; BotSimulateApply's death sweep (run once, after whichever case
             // ran) is what converts a lethal hit into a corpse and resets Damage to 0.
             u.Damage += Math.Max(0, amt);
-        }
-
-        // ---- bot lookahead: own-turn beam search (additive, unwired) -----------------------------
-        // Plans a short SEQUENCE of the bot's own consecutive actions (no opponent replies modeled)
-        // and returns only the FIRST step. UNWIRED this task: BotDoOneAction still decides via
-        // BotChoose(BotEnumerateMoves(...)) exactly as before; this is exercised only by the
-        // PTO_BOT_SEQDEBUG hook below. Every candidate comes from BotEnumerateMoves, so the returned
-        // move (were it ever wired in) is always legal. Task 5/6 wire difficulty tiers to this.
-        static readonly bool BotSeqDebugEnabled = Environment.GetEnvironmentVariable("PTO_BOT_SEQDEBUG") == "1";
-
-        // One beam node: a simulated position, the sequence of moves that reached it, and the summed
-        // score of that sequence.
-        class BotBeamEntry
-        {
-            public BotClonedState State;
-            public List<BotMove> Steps;
-            public double Total;
-        }
-
-        static BotMove BotPlanSequence(Battle b, BattleSlot bot, int beamWidth, int maxDepth)
-        {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var beam = new List<BotBeamEntry> { new BotBeamEntry { State = BotCloneState(b), Steps = new List<BotMove>(), Total = 0 } };
-            for (int depth = 0; depth < maxDepth; depth++)
-            {
-                var next = new List<BotBeamEntry>();
-                foreach (var entry in beam)
-                {
-                    var moves = BotEnumerateMoves(entry.State.Battle, entry.State.MineSlot, entry.State.Mine, entry.State.Opp);
-                    if (moves.Count == 0) { next.Add(entry); continue; } // dead end, carry forward unchanged
-                    moves.Sort((x, y) => y.Score.CompareTo(x.Score));
-                    int take = Math.Min(beamWidth, moves.Count);
-                    for (int i = 0; i < take; i++)
-                    {
-                        var cand = moves[i];
-                        var state = BotCloneCloned(entry.State);
-                        BotSimulateApply(state, cand);
-                        var steps = new List<BotMove>(entry.Steps) { cand };
-                        next.Add(new BotBeamEntry { State = state, Steps = steps, Total = entry.Total + cand.Score });
-                    }
-                }
-                next.Sort((x, y) => y.Total.CompareTo(x.Total));
-                if (next.Count > beamWidth) next.RemoveRange(beamWidth, next.Count - beamWidth);
-                beam = next;
-            }
-            sw.Stop();
-            BotMove first = beam.Count > 0 && beam[0].Steps.Count > 0 ? beam[0].Steps[0] : null;
-            if (BotSeqDebugEnabled)
-            {
-                string seq = beam.Count > 0 ? string.Join(" -> ", beam[0].Steps.ConvertAll(m => m.Desc)) : "(empty)";
-                Log("BOT SEQDEBUG: width=" + beamWidth + " depth=" + maxDepth + " elapsed=" + sw.Elapsed.TotalMilliseconds.ToString("F2") + "ms seq=[" + seq + "]");
-            }
-            return first;
         }
 
         // ---- bot lookahead: minimax search wired to Hard/Challenge tiers -------------------------
