@@ -1485,7 +1485,18 @@ namespace PtoServer
             if (sid == 0) return true;                                             // Deck Test
             int world, node, diff;
             if (!StageDecompose(sid, out world, out node, out diff)) return true;  // unknown -> open
-            if (node == 0) return true;                                            // band start: always open
+            if (node == 0)                                                         // first node of a world
+            {
+                if (world == 0) return true;                                       // World 1 start: always open
+                // Cross-world gate: World N's first node opens at difficulty d once the PREVIOUS world's
+                // final node (index 7; Worlds 1-2 are 8 nodes each) was cleared at difficulty >= d. Mirrors
+                // the within-world rule across the world boundary, matching the client's linear map + world-
+                // select gate (obj_campaign_lobby checks stages[25,1]/[49,1]). ponytail: threshold is the
+                // prev world's LAST node; loosen to "any node in prev world" if that proves too strict in play.
+                for (int dd = diff; dd <= 2; dd++)
+                    if (completed.Contains(StageCompose(world - 1, 7, dd))) return true;
+                return false;
+            }
             for (int dd = diff; dd <= 2; dd++)                                     // prev node cleared at >= this difficulty
                 if (completed.Contains(StageCompose(world, node - 1, dd))) return true;
             return false;
