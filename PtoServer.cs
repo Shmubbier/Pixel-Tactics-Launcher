@@ -964,9 +964,21 @@ namespace PtoServer
                 if (alive.Count > 0)
                 {
                     int k; lock (_rng) k = alive[_rng.Next(alive.Count)];
-                    DamageEnemyAt(opPs, k / 10, k % 10, 3);
-                    Log("  LEADER (Rukyuk): Bombard 3 -> rival (" + (k / 10) + "," + (k % 10) + ")");
-                    if (theirs != null) ProcessImmediateDeaths(opPs, theirs, mine, b);
+                    int hx = k / 10, hy = k % 10;
+                    DamageEnemyAt(opPs, hx, hy, 3);
+                    Log("  LEADER (Rukyuk): Bombard 3 -> rival (" + hx + "," + hy + ")");
+                    if (theirs != null)
+                    {
+                        // Show it: fire the Bombard hit visual on the struck cell, sweep instant deaths,
+                        // then push the new HP to both clients. Without this the damage landed silently
+                        // (ApplyLeaderOnOrder runs AFTER ResolveEffect's sync, and HandleOrder does no
+                        // further sync), so the passive looked like it did nothing.
+                        FireEffect(new OrderEffect { Kind = OrderKind.DamageRandom, Amount = 3 },
+                                   mine, theirs, b, 1, 1, hx, hy, 0);
+                        ProcessImmediateDeaths(opPs, theirs, mine, b);
+                        BattleSlot q0 = mine.P == 0 ? mine : theirs, q1 = mine.P == 0 ? theirs : mine;
+                        SyncUnitStates(q0, q1, b);
+                    }
                 }
             }
             else if (lr == 13 && !ps.OrderedThisTurn) // Tatsumi: first order each turn -> draw 1 + gain 1 action
@@ -1088,6 +1100,8 @@ namespace PtoServer
             a[91] = 0x1; // Commando     - Rear R.Attack
             a[93] = 0x7; // Pistolier    - all waves R.Attack
             a[94] = 0x4; // Magus        - Vanguard R.Attack
+            a[105] = 0x2; // Scholar         - Flank R.Attack ("Ranged Attack") [audit gap fix]
+            a[113] = 0x2; // Shadow Elemental - Flank R.Attack ("Ranged Attack.") [audit gap fix]
             return a;
         }
         static bool IsRangedAtWave(ushort card, int wave)
@@ -2193,11 +2207,17 @@ namespace PtoServer
             // flag since the client sets obj_battle_control.AI from each. (Was hardcoded 0, which hid the pause
             // button and mis-routed campaign screens.)
             bool aiBattle = slot.Battle != null && slot.Battle.BotP >= 0;
+            // Lesandra (#11): recruiting is a free action, so the client must let the local player recruit
+            // even at 0 actions. Append a per-player "free recruit" flag; the client reads it from its OWN
+            // detail packet (me==true) and drops the action gate on hand pickup + recruit. Appended LAST so
+            // an unpatched client simply ignores the extra byte (backward compatible).
+            bool meFree  = slot.Battle != null && slot.Battle.P[slot.P].LeaderCard / 2 == 11;
+            bool oppFree = slot.Battle != null && slot.Battle.P[1 - slot.P].LeaderCard / 2 == 11; // best-effort; client uses only its own
             byte[] d1 = new PacketWriter().WriteBool(true).WriteU16(myBack).WriteU16(myLand)
-                .WriteString(Display(me.User)).WriteBool(RankStore.IsLegend(me.User)).WriteU16(RankStore.RankOf(me.User)).WriteBool(aiBattle).WriteBool(true)
+                .WriteString(Display(me.User)).WriteBool(RankStore.IsLegend(me.User)).WriteU16(RankStore.RankOf(me.User)).WriteBool(aiBattle).WriteBool(true).WriteBool(meFree)
                 .Frame(Op.BattleDetails);
             byte[] d2 = new PacketWriter().WriteBool(false).WriteU16(opBack).WriteU16(opLand)
-                .WriteString(Display(opp.User)).WriteBool(RankStore.IsLegend(opp.User)).WriteU16(RankStore.RankOf(opp.User)).WriteBool(aiBattle).WriteBool(true)
+                .WriteString(Display(opp.User)).WriteBool(RankStore.IsLegend(opp.User)).WriteU16(RankStore.RankOf(opp.User)).WriteBool(aiBattle).WriteBool(true).WriteBool(oppFree)
                 .Frame(Op.BattleDetails);
             ms.Write(d1, 0, d1.Length);
             ms.Write(d2, 0, d2.Length);
@@ -3066,7 +3086,7 @@ namespace PtoServer
                         int fx = -1;
                         for (int w = 2; w >= 0; w--) { BUnit fu; if (opPs.Units.TryGetValue(Key(w, lane), out fu) && fu != null && !fu.IsCorpse) { fx = w; break; } }
                         if (fx >= 0) DamageEnemyAt(opPs, fx, lane, eff.Amount);
-                        else if (lane == 1) DamageEnemyAt(opPs, 1, 1, eff.Amount); // clear center -> the leader
+                        // Blast hits enemy HEROES only; a clear center lane does NOT let it reach the leader.
                     }
                     break;
                 case OrderKind.DamageRandom: // Bombard: a random rival hero
@@ -3085,8 +3105,8 @@ namespace PtoServer
                         else { gx = -1; enemyGy = -1; Log("  bombard: no enemy heroes"); }
                     }
                     break;
-                case OrderKind.DamageLeader: // Backstab: the rival leader
-                    DamageEnemyAt(opPs, 1, 1, eff.Amount);
+                case OrderKind.DamageLeader: // Backstab: the rival leader (explicit leader damage)
+                    DamageLeaderAt(opPs, eff.Amount);
                     break;
                 case OrderKind.FinisherKill: // Finisher Kill: defeat a hero ONLY if it is already damaged
                     {
@@ -3099,9 +3119,8 @@ namespace PtoServer
                 case OrderKind.Backlash: // deal a hero damage equal to its OWN attack
                     {
                         BUnit u;
-                        if (gx == 1 && enemyGy == 1)
-                            DamageEnemyAt(opPs, 1, 1, AtkOf(opPs.LeaderCard) + opPs.LeaderStrBonus);
-                        else if (opPs.Units.TryGetValue(Key(gx, enemyGy), out u) && u != null && !u.IsCorpse)
+                        // Backlash hits a HERO (its own attack back at it); it is not a leader-damage effect.
+                        if (opPs.Units.TryGetValue(Key(gx, enemyGy), out u) && u != null && !u.IsCorpse)
                             DamageEnemyAt(opPs, gx, enemyGy, u.Atk); // u.Atk folds in base + strength
                         else Log("  backlash: no enemy hero at (" + gx + "," + enemyGy + ")");
                     }
@@ -3998,11 +4017,11 @@ namespace PtoServer
         static void DamageEnemyAt(PlayerState opPs, int gx, int gy, int dmg)
         {
             if (gx < 0 || gx > 2 || gy < 0 || gy > 2) return;
-            if (gx == 1 && gy == 1)
-            {
-                if (opPs.LeaderShield) { opPs.LeaderShield = false; Log("    LEADER SHIELD absorbed the effect"); return; }
-                opPs.LeaderLife -= dmg; Log("    damage -> enemy LEADER -" + dmg + " (life " + opPs.LeaderLife + ")"); return;
-            }
+            // Leaders are NOT damaged by area/targeted effect damage. Only effects whose text names the
+            // leader (Backstab / Lixis) hurt it, via DamageLeaderAt / direct. So a Fire column, Thunder
+            // row, Poison, Ice, Blast, Meteor, Bombard, etc. that sweeps or is aimed at the center cell
+            // simply does nothing to the leader.
+            if (gx == 1 && gy == 1) { Log("    effect does not damage the leader (only Backstab/Lixis-type do)"); return; }
             BUnit u;
             if (opPs.Units.TryGetValue(Key(gx, gy), out u) && u != null && !u.IsCorpse)
             {
@@ -4014,6 +4033,16 @@ namespace PtoServer
                 Log("    damage -> enemy (" + gx + "," + gy + ") card " + u.Card + " -" + actual + " (now " + Math.Max(0, u.Max - u.Damage) + "/" + u.Max + ")");
             }
             else Log("    damage -> no enemy unit at (" + gx + "," + gy + ")");
+        }
+
+        // Explicit leader damage: only for effects whose text names the leader (Backstab and its riders,
+        // e.g. Vampire; Lixis uses its own direct hit). Honors Leader Shield. Everything else must route
+        // through DamageEnemyAt, which no longer touches the leader.
+        static void DamageLeaderAt(PlayerState opPs, int dmg)
+        {
+            if (opPs.LeaderShield) { opPs.LeaderShield = false; Log("    LEADER SHIELD absorbed the effect"); return; }
+            opPs.LeaderLife -= dmg;
+            Log("    damage -> enemy LEADER -" + dmg + " (life " + opPs.LeaderLife + ")");
         }
 
         static void HealOwnAt(PlayerState ps, int gx, int gy, int amount)
@@ -4046,7 +4075,10 @@ namespace PtoServer
             if (b == null || b.Over || !b.Started) return;
             if (mine.P != b.Active) { Log("SUMMON from non-active player (ignored)"); GrantAction(mine); return; }
             PlayerState ps = b.P[mine.P];
-            if (ps.ActionsRemaining <= 0) { Log("SUMMON rejected: no actions remaining for " + mine.Me.User); GrantAction(mine); return; }
+            // Lesandra: recruiting is a FREE action, so a recruit is allowed even at 0 actions. The AP gate
+            // for a normal recruit is therefore deferred (applied below, skipping Lesandra); reserve/trap
+            // placement is NOT free and keeps its own gate in the gx==3 branch.
+            bool lesandraFree = ps.LeaderCard / 2 == 11;
 
             var r = new PacketReader(payload, 0);
             byte who = r.ReadU8();
@@ -4058,8 +4090,15 @@ namespace PtoServer
             if (handIndex >= mine.Hand.Count) { Log("SUMMON rejected: invalid hand index " + handIndex); GrantAction(mine); return; }
 
             // Reserve row (grid_x==3): the client plays Traps (o_type 2) AND Operations/Ongoing (o_type 1,
-            // e.g. Immortality) here, not as a normal summon. Arm the reserve card.
-            if (gx == 3) { HandleReservePlace(mine, theirs, b, ps, handIndex, gy); return; }
+            // e.g. Immortality) here, not as a normal summon. Arm the reserve card. Costs an action.
+            if (gx == 3)
+            {
+                if (ps.ActionsRemaining <= 0) { Log("RESERVE rejected: no actions remaining for " + mine.Me.User); GrantAction(mine); return; }
+                HandleReservePlace(mine, theirs, b, ps, handIndex, gy); return;
+            }
+
+            // Normal recruit costs an action, unless Lesandra makes it free.
+            if (!lesandraFree && ps.ActionsRemaining <= 0) { Log("SUMMON rejected: no actions remaining for " + mine.Me.User); GrantAction(mine); return; }
 
             // Validate target cell is in current wave (gx = wave position: 0=Rear, 1=Flank, 2=Vanguard)
             if (gx != b.Wave) { Log("SUMMON rejected: target x=" + gx + " not in wave " + b.Wave); GrantAction(mine); return; }
@@ -4274,6 +4313,20 @@ namespace PtoServer
                     if (q0 != null && q1 != null) SyncUnitStates(q0, q1, b);
                     return;
                 }
+                // A hero's action wave-spell EXHAUSTS it for the wave, exactly like an attack: once a hero
+                // has acted (attacked or cast a non-Quick spell) it cannot act again this wave, so clicking
+                // Spell greys it out just like Attack. Quick spells (seff.Free) never exhaust and are never
+                // blocked by exhaustion; a leader cast (1,1) does not exhaust a board unit here.
+                bool casterIsHero = !(ax == 1 && ay == 1);
+                BUnit casterUnit = null; if (casterIsHero) ps.Units.TryGetValue(Key(ax, ay), out casterUnit);
+                if (casterIsHero && !seff.Free && casterUnit != null && casterUnit.HasAttackedThisWave)
+                {
+                    Log("  -> SPELL rejected: caster (" + ax + "," + ay + ") already acted this wave");
+                    GrantAction(mine);
+                    BattleSlot qx0 = mine.P == 0 ? mine : theirs, qx1 = mine.P == 0 ? theirs : mine;
+                    if (qx0 != null && qx1 != null) SyncUnitStates(qx0, qx1, b);
+                    return;
+                }
                 // Board validation. selectGrid==1 means the player clicked their OWN board, 0 the enemy's.
                 // The client's spell targeting will highlight a unit on EITHER board (e.g. spell_unsummon
                 // marks any non-Intercept living unit under the cursor), so an enemy-only spell can be
@@ -4312,12 +4365,20 @@ namespace PtoServer
                         ClearTrapVisual(theirs, mine, defTrap.TrapSpellLane); defTrap.TrapSpellLane = -1;
                         Log("  -> TRAP: " + (theirs != null ? theirs.Me.User : "defender") + "'s Cancel Spell negates " + mine.Me.User + "'s spell; owner draws 1");
                         if (theirs != null) DrawCardsFor(theirs, mine, b, 1);
+                        if (casterIsHero && !seff.Free && casterUnit != null && !casterUnit.IsCorpse)
+                            casterUnit.HasAttackedThisWave = true; // the cast was attempted; the hero is used up
                         ConsumeAction(mine, theirs, b);
                         BattleSlot t0 = mine.P == 0 ? mine : theirs, t1 = mine.P == 0 ? theirs : mine;
                         if (t0 != null && t1 != null) SyncUnitStates(t0, t1, b);
                         return;
                     }
                 }
+                // Exhaust the casting hero (action spells only) BEFORE resolving: ResolveEffect runs its own
+                // SyncUnitStates, so if the flag were set AFTER, that sync would send the caster as active=1
+                // and un-grey it -- the "spells don't exhaust the unit" bug. Setting it first makes the sync
+                // send active=0, and the server also rejects any further attack/cast this wave.
+                if (casterIsHero && !seff.Free && casterUnit != null && !casterUnit.IsCorpse)
+                    casterUnit.HasAttackedThisWave = true;
                 ResolveEffect(seff, mine, theirs, b, tx, ty, ax, ay, selectGrid); // caster cell (Swap/Takedown) + clicked board (either-board effects)
                 // Seth: any wave-spell also triggers Scry 3 (opens the scry UI, unless one is already open).
                 if (!b.Over && ps.LeaderCard / 2 == 15 && ps.PendingScry == null) { Log("  LEADER (Seth): any wave-spell -> Scry 3"); OpenScry(mine, ps, 3); }
@@ -5258,7 +5319,9 @@ namespace PtoServer
                 ProcessCasualties(b, p0, p1);
                 if (b.Over) return;
                 // Leader end-of-round passives (Lixis rival damage / Mikhail resurrect), then re-check rout.
-                ApplyLeaderEndOfRound(b, p0, p1);
+                // The round-1 ceasefire is not a real round: it counts toward neither triggers nor the
+                // round number, so end-of-round passives only fire once real play has begun (round >= 2).
+                if (b.Round >= 2) ApplyLeaderEndOfRound(b, p0, p1);
                 for (int pi = 0; pi < 2 && !b.Over; pi++)
                     if (b.P[pi].LeaderLife <= 0)
                     {
