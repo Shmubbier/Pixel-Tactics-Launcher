@@ -1646,6 +1646,14 @@ namespace PtoServer
         {
             if (moves.Count == 0) return null;
             moves.Sort((x, y) => y.Score.CompareTo(x.Score));
+            // A guaranteed win this action is always taken, at every difficulty - even an "easy" bot takes a
+            // free win rather than fumbling it for flavor. 800 is the leader-kill bonus (BotAddAttack L1883,
+            // BotPlanEffect DamageLeader L2068); reuse it so threshold and bonus can never drift apart.
+            if (moves[0].Score >= 800)
+            {
+                moves[0].Rank = 0; moves[0].Pool = moves.Count; moves[0].Top = moves[0].Score;
+                return moves[0];
+            }
             int lo, hi; BotBand(diff, out lo, out hi);
             int n = moves.Count;
             if (lo > n - 1) lo = n - 1;
