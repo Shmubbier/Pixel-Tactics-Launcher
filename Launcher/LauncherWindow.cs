@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -29,6 +30,11 @@ sealed class LauncherWindow : Form
     Button _play = null!;
     Button _gear = null!;
     Label _status = null!;
+    TextBox _log = null!;
+    Button _logToggle = null!;
+    bool _logShown;
+    const int CollapsedH = 320, ExpandedH = 540;
+    readonly StringBuilder _logBuffer = new(); // holds Console output until the handle exists
 
     // Run the window on a dedicated STA thread (WinForms requires STA). Console verbs
     // (play/check/demo/...) stay on the normal path; only the windowed launcher opens here.
@@ -107,10 +113,49 @@ sealed class LauncherWindow : Form
             Size = new Size(480, 24),
         };
 
+        // Collapsible log panel (Minecraft-style): the backend's Console output is piped here
+        // instead of a separate console window. Hidden by default; the toggle grows the window.
+        _logToggle = new Button
+        {
+            Text = "▾ Show log",
+            Font = new Font("Segoe UI", 8f),
+            ForeColor = Color.Gainsboro,
+            BackColor = Color.FromArgb(0x24, 0x22, 0x30),
+            FlatStyle = FlatStyle.Flat,
+            Size = new Size(110, 24),
+            Location = new Point(12, 284),
+        };
+        _logToggle.FlatAppearance.BorderSize = 0;
+        _logToggle.Click += (_, _) => ToggleLog();
+
+        _log = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            BackColor = Color.FromArgb(0x0d, 0x0c, 0x14),
+            ForeColor = Color.FromArgb(0xba, 0xd0, 0xa0),
+            Font = new Font("Consolas", 8f),
+            BorderStyle = BorderStyle.FixedSingle,
+            Location = new Point(12, 316),
+            Size = new Size(456, ExpandedH - 316 - 12),
+            Visible = false,
+            TabStop = false,
+        };
+
         Controls.Add(title);
         Controls.Add(_play);
         Controls.Add(_gear);
         Controls.Add(_status);
+        Controls.Add(_logToggle);
+        Controls.Add(_log);
+
+        // Pipe Console (and stderr) into the log panel now, so startup messages below are captured.
+        var writer = new ConsoleLogWriter(this);
+        Console.SetOut(writer);
+        Console.SetError(writer);
+        // Flush anything logged before the window handle existed (buffered by AppendLog).
+        Load += (_, _) => FlushLogBuffer();
 
         // Absorbs what play.bat used to do: make the Firebase URL available to both this
         // process (MetaClient) and the spawned server, so online matchmaking works with no
@@ -118,6 +163,44 @@ sealed class LauncherWindow : Form
         EnsureFirebaseEnv();
         bool? pref = LoadOnlinePref();
         RecomputeState(pref);
+    }
+
+    void ToggleLog()
+    {
+        _logShown = !_logShown;
+        _log.Visible = _logShown;
+        _logToggle.Text = _logShown ? "▴ Hide log" : "▾ Show log";
+        ClientSize = new Size(480, _logShown ? ExpandedH : CollapsedH);
+    }
+
+    // Append backend Console output to the log panel. Thread-safe: called from the play loop and
+    // the Steam pump thread. Buffers until the window handle exists, then appends on the UI thread.
+    public void AppendLog(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (!IsHandleCreated) { lock (_logBuffer) _logBuffer.Append(text); return; }
+        try { BeginInvoke(() => { _log.AppendText(text); }); }
+        catch { lock (_logBuffer) _logBuffer.Append(text); }
+    }
+
+    void FlushLogBuffer()
+    {
+        string pending;
+        lock (_logBuffer) { pending = _logBuffer.ToString(); _logBuffer.Clear(); }
+        if (pending.Length > 0) _log.AppendText(pending);
+    }
+
+    // Routes Console.Out/Error into the log panel (see ctor). Line-oriented writes are enough for
+    // the backend's Console.WriteLine calls; a per-char Write covers the rest.
+    sealed class ConsoleLogWriter : TextWriter
+    {
+        readonly LauncherWindow _win;
+        public ConsoleLogWriter(LauncherWindow win) { _win = win; }
+        public override Encoding Encoding => Encoding.UTF8;
+        public override void Write(char value) => _win.AppendLog(value.ToString());
+        public override void Write(string? value) { if (value != null) _win.AppendLog(value); }
+        public override void WriteLine(string? value) => _win.AppendLog((value ?? "") + Environment.NewLine);
+        public override void WriteLine() => _win.AppendLog(Environment.NewLine);
     }
 
     // If PTO_FIREBASE_URL is not already set, look for a firebase.txt in the bundle (beside the

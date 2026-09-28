@@ -23,9 +23,18 @@ static class Program
     const byte OpLogin = 46;     // client -> server: login (captured to replay onto the host)
     const byte OpLoaded = 48;    // server -> client: login flow done, door open -> lobby
 
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern bool AttachConsole(int dwProcessId);
+    const int ATTACH_PARENT_PROCESS = -1;
+
     static async Task<int> Main(string[] args)
     {
-        switch (args.Length > 0 ? args[0] : "")
+        string verb = args.Length > 0 ? args[0] : "";
+        // WinExe has no console of its own. The windowed path ("" / gui) pipes output into the
+        // in-window log; the console verbs reattach to the terminal that launched them so their
+        // output is still visible there.
+        if (verb != "" && verb != "gui") { try { AttachConsole(ATTACH_PARENT_PROCESS); } catch { } }
+        switch (verb)
         {
             case "":    // no args: double-clicked exe -> the windowed launcher
             case "gui": // windowed launcher: minimal Play/Update window

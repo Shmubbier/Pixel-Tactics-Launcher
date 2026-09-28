@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe = no separate console window when the launcher opens. The windowed path pipes
+         the backend's Console output into an in-window log panel; the console verbs
+         (play/check/demo/...) reattach to the parent terminal via AttachConsole in Main. -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>ptolaunch</AssemblyName>
     <Nullable>enable</Nullable>
