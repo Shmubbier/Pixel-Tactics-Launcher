@@ -16,6 +16,29 @@ PtoServer, the other connects to it over the relay. Same on both machines.
 
     guest:  game -> 127.0.0.1:51338 -> ptolaunch == relay ==> authority's ptolaunch -> its PtoServer
 
+## Windowed launcher (`gui`)
+
+`ptolaunch gui` opens the GUI launcher instead of the console flow: a WinForms window
+hosting one WebView2 that serves `gui/index.html` (pixel-art UI built from the
+Figma_Resources assets, recreating the reference mockup). It shows the player's profile,
+Steam friends (name + online), rank and win rate (from the Firebase ranked ladder), and a
+PLAY button. The UI is plain HTML/CSS/JS and can be previewed in any browser (serve the
+`gui/` folder over HTTP); with no .NET host it falls back to mock data.
+
+- **One process owns Steam**: the GUI inits the relay (identity + friends, refreshed on the
+  relay's pump thread so Steam calls stay single-threaded) and hands it to `PlayAsync`, so
+  there is no second `SteamAPI.Init`. No Steam running just means an offline-looking
+  launcher; Play still works offline.
+- **Play** runs the same offline+online loop (`Program.PlayAsync`) in-process and launches
+  the game once the proxy is listening on 51338. Game exe: `PTO_GAME_EXE`, else `ptoc.exe`
+  beside the launcher.
+- Bridge contract lives in `gui/app.js` (ui<->host `postMessage` JSON) and `GuiWindow.cs`.
+- Needs the Edge WebView2 runtime (bundled on Win11).
+
+Deferred (ponytail ceilings): friend list shows all Steam friends, not just PTO players
+(needs rich presence on AppID 480); the friend-row "+" is a match-invite stub; the console
+window still shows behind the GUI (kept for logs).
+
 ## Build order status
 
 1. **Transport tunnel** - DONE. `ptolaunch demo` proves the byte path in-process.

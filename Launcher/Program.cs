@@ -27,6 +27,9 @@ static class Program
     {
         switch (args.Length > 0 ? args[0] : "")
         {
+            case "":    // no args: double-clicked exe -> the windowed launcher
+            case "gui": // windowed launcher: minimal Play/Update window
+                return LauncherWindow.Run();
             case "play": // symmetric matchmaking: queue, pair, auto-elect authority
                 return await PlayAsync();
             case "check": // preflight: Steam + Firebase + server, one line each
@@ -44,7 +47,7 @@ static class Program
             case "rankeddemo": // ranked accumulation self-check (fake RTDB)
                 return await RankedDemoAsync();
             default:
-                Console.WriteLine("usage: ptolaunch play | check | ladder | demo | queuedemo | matchdemo | sniffdemo | rankeddemo");
+                Console.WriteLine("usage: ptolaunch gui | play | check | ladder | demo | queuedemo | matchdemo | sniffdemo | rankeddemo");
                 return 1;
         }
     }
@@ -103,7 +106,9 @@ static class Program
     // broadcasting. It watches the game -> server stream and only when the game sends
     // Op.Queue (the player chose online matchmaking) does it go online. The campaign
     // (Op.StartStage) is a local bot battle, so it never trips this.
-    static async Task<int> PlayAsync()
+    // `online` may be supplied by the GUI (which already inited Steam) so the relay is
+    // shared, not double-inited. Passed null (the console `play` verb) it runs standalone.
+    internal static async Task<int> PlayAsync(OnlineState? online = null)
     {
         var meta = new MetaClient(); // only used once the player goes online
         if (!await EnsureServerAsync()) return 1;
@@ -112,12 +117,14 @@ static class Program
         Console.WriteLine("offline: local server ready. Login, deckbuilding, and campaign work with no internet.");
         Console.WriteLine("point the game at 127.0.0.1 and play. Choose online matchmaking in-game to find a match.");
 
-        var online = new OnlineState();
+        online ??= new OnlineState();
         // Warm the Steam relay NOW so its SDR route is ready by the time a match happens.
         // Connecting cold causes 5008 rendezvous timeouts, badly so behind CGNAT where the
-        // relay is the only viable path. Non-fatal: offline play doesn't need it.
-        try { var r = new SteamRelay(); r.Init(); online.Relay = r; Console.WriteLine("steam: relay warming up (ready by match time)"); }
-        catch (Exception ex) { Console.WriteLine($"steam: relay not started yet ({ex.Message}); will init on first match"); }
+        // relay is the only viable path. Non-fatal: offline play doesn't need it. Skipped
+        // when the GUI already provided an inited relay.
+        if (!online.Offline && online.Relay == null)
+            try { var r = new SteamRelay(); r.Init(); online.Relay = r; Console.WriteLine("steam: relay warming up (ready by match time)"); }
+            catch (Exception ex) { Console.WriteLine($"steam: relay not started yet ({ex.Message}); will init on first match"); }
 
         var l = new TcpListener(IPAddress.Loopback, GamePort);
         if (!TryStart(l))
@@ -292,6 +299,7 @@ static class Program
 
     static async Task GoOnlineCoreAsync(MetaClient meta, OnlineState online, TcpClient game, TaskCompletionSource<SteamConnectionStream?> handoff)
     {
+        if (online.Offline) { Console.WriteLine("offline: skipping matchmaking (launcher set to offline)"); return; }
         if (!online.Begin()) return; // once per match (Reset re-arms it after the match ends)
         if (!meta.Enabled) { Console.WriteLine("online needs Firebase (firebase.txt); staying offline"); return; }
         SteamRelay relay;
@@ -580,11 +588,31 @@ static class Program
     static async Task<bool> EnsureServerAsync()
     {
         if (await TryConnectServerAsync(LocalPort)) return true;
-        string exe = Environment.GetEnvironmentVariable("PTO_SERVER_EXE") ?? "PtoServer.exe";
+        string exe = ServerExe();
         if (TrySpawnServer(exe, LocalPort) == null) return false;
         for (int i = 0; i < 20; i++) { if (await TryConnectServerAsync(LocalPort)) return true; await Task.Delay(500); }
         Console.WriteLine($"server did not come up on 127.0.0.1:{LocalPort}");
         return false;
+    }
+
+    // PtoServer.exe: PTO_SERVER_EXE if set, else beside the launcher (deployment), else
+    // the repo's PTO_C151_Server build output (dev), so Play works from `dotnet run`.
+    internal static string ServerExe()
+    {
+        var env = Environment.GetEnvironmentVariable("PTO_SERVER_EXE");
+        if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
+        var beside = Path.Combine(AppContext.BaseDirectory, "PtoServer.exe");
+        if (File.Exists(beside)) return beside;
+        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+            foreach (var rel in new[] { Path.Combine("PtoServer.exe"),
+                                        Path.Combine("bin", "Release", "net10.0", "PtoServer.exe"),
+                                        Path.Combine("PTO_C151_Server", "PtoServer.exe"),
+                                        Path.Combine("PTO_C151_Server", "bin", "Release", "net10.0", "PtoServer.exe") })
+            {
+                var cand = Path.Combine(d.FullName, rel);
+                if (File.Exists(cand)) return cand;
+            }
+        return beside; // not found: spawn fails and is reported
     }
 
     static System.Diagnostics.Process? TrySpawnServer(string exe, int port)
@@ -633,6 +661,11 @@ static class Program
                         if (f.Length >= 3 && ulong.TryParse(f[1], out var w) && ulong.TryParse(f[2], out var l))
                         {
                             await meta.AddResultAsync(w, l);
+                            // Per-player match history (feeds the launcher's match list, activity
+                            // heatmap, and derived records). f[0] is the unix ts from matches.txt.
+                            long ts = long.TryParse(f[0], out var mt) ? mt : DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                            await meta.AddHistoryAsync(w, true, l, ts);
+                            await meta.AddHistoryAsync(l, false, w, ts);
                             Console.WriteLine($"ladder: {w} beat {l}");
                         }
                     }
@@ -666,7 +699,7 @@ static class Program
         }
         catch (Exception ex) { Console.WriteLine($"[FAIL] Steam: {FirstLine(ex)}"); ok = false; }
 
-        string exe = Environment.GetEnvironmentVariable("PTO_SERVER_EXE") ?? "PtoServer.exe";
+        string exe = ServerExe();
         if (await TryConnectServerAsync(LocalPort)) Console.WriteLine($"[ ok ] Server: already listening on 127.0.0.1:{LocalPort}");
         else if (!File.Exists(exe)) { Console.WriteLine($"[FAIL] Server: '{exe}' not found (set PTO_SERVER_EXE)"); ok = false; }
         else
@@ -944,6 +977,7 @@ sealed class OnlineState
 {
     int _begun;
     public SteamRelay? Relay;    // created on first online use, reused across matches
+    public bool Offline;         // launcher chose offline: never warm the relay or matchmake (game still plays local)
     public ulong GuestAuthority; // set once we've been elected guest; then game reconnects route to the relay
 
     // Authority side, updated per match; the persistent relay listener reads these.

@@ -1,10 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>ptolaunch</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- WinForms hosts the native launcher window (no-arg / `gui`). Console verbs
+         (play/check/demo/...) still work; only the window path opens a window. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <!-- x64 so it shares one .NET 10 runtime with the server. Uses steam_api64.dll
          (Steamworks.NET win-x64). The game is a separate 32-bit process with its own
          steam_api.dll, so the launcher's arch is independent of it. -->

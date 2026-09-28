@@ -154,6 +154,74 @@ sealed class MetaClient
                             .CompareTo(RankFromCounts(b.Item2.wins, b.Item2.losses)));
         return outp;
     }
+
+    // --- Player profiles: SteamID -> display name ------------------------------
+    // Each client writes its own on startup so match-history opponents and ladder
+    // rows can be shown by name (matches.txt only has SteamIDs). REST PUT.
+    // PATCH merges fields, so name and avatarHero can be set independently without one
+    // clobbering the other (RTDB REST PATCH = shallow merge on the node).
+    async Task PatchAsync(string path, object body)
+    {
+        using var req = new HttpRequestMessage(new HttpMethod("PATCH"), Url(path))
+        { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
+        try { (await _http.SendAsync(req)).EnsureSuccessStatusCode(); } catch { /* best effort */ }
+    }
+
+    public Task SetProfileAsync(ulong id, string name) => PatchAsync($"profiles/{id}", new { name, ts = Now() });
+    public Task SetAvatarAsync(ulong id, int hero) => PatchAsync($"profiles/{id}", new { avatarHero = hero });
+
+    public async Task<Dictionary<string, ProfileRow>> ProfilesAsync()
+    {
+        try
+        {
+            var json = await _http.GetStringAsync(Url("profiles"));
+            if (!string.IsNullOrWhiteSpace(json) && json != "null")
+                return JsonSerializer.Deserialize<Dictionary<string, ProfileRow>>(json) ?? new();
+        }
+        catch { /* best effort */ }
+        return new();
+    }
+
+    // --- Match history (per player) --------------------------------------------
+    // The authority appends one entry per player after each finished match (see
+    // Program.WatchMatchesAsync). POST lets Firebase mint the child key; the line
+    // cursor in WatchMatchesAsync guarantees each match is pushed once. The launcher
+    // reads its own for the match list, the activity heatmap, and derived records.
+    public async Task AddHistoryAsync(ulong id, bool win, ulong opp, long ts)
+    {
+        var body = JsonSerializer.Serialize(new HistoryRow { ts = ts, win = win, opp = opp.ToString() });
+        using var c = new StringContent(body, Encoding.UTF8, "application/json");
+        try { (await _http.PostAsync(Url($"history/{id}"), c)).EnsureSuccessStatusCode(); } catch { /* best effort */ }
+    }
+
+    public async Task<List<HistoryRow>> HistoryAsync(ulong id)
+    {
+        var outp = new List<HistoryRow>();
+        try
+        {
+            var json = await _http.GetStringAsync(Url($"history/{id}"));
+            if (string.IsNullOrWhiteSpace(json) || json == "null") return outp;
+            var d = JsonSerializer.Deserialize<Dictionary<string, HistoryRow>>(json) ?? new();
+            foreach (var kv in d) if (kv.Value != null) outp.Add(kv.Value);
+            outp.Sort((a, b) => b.ts.CompareTo(a.ts)); // newest first
+        }
+        catch { /* best effort */ }
+        return outp;
+    }
+}
+
+sealed class ProfileRow
+{
+    public string name { get; set; } = "";
+    public int avatarHero { get; set; }
+    public long ts { get; set; }
+}
+
+sealed class HistoryRow
+{
+    public long ts { get; set; }
+    public bool win { get; set; }
+    public string opp { get; set; } = "";
 }
 
 sealed class RankRow

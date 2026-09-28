@@ -29,6 +29,11 @@ sealed class SteamRelay : IDisposable
     public ulong MySteamId { get; private set; }
     public string MyName { get; private set; } = "host";
 
+    // Friends snapshot for the GUI. Refreshed ON the pump thread (Steamworks calls are
+    // not thread-safe), so the UI just reads this array and never touches the Steam API.
+    public volatile FriendInfo[] Friends = Array.Empty<FriendInfo>();
+    int _friendTick;
+
     // The classic path has no SDR route to wait on; kept because the guest still polls
     // it before connecting. Always ready.
     public bool RelayReady() => true;
@@ -76,6 +81,7 @@ sealed class SteamRelay : IDisposable
         while (_run)
         {
             SteamAPI.RunCallbacks(); // dispatches OnSessionRequest / OnSessionConnectFail on this thread
+            if (_friendTick++ % 500 == 0) RefreshFriends(); // ~every 2s (Sleep(4)); Steam calls stay on this thread
             while (_log.TryDequeue(out var line)) Console.WriteLine(line); // print AFTER the lock is released
             while (SteamNetworking.IsP2PPacketAvailable(out uint size) && size > 0)
             {
@@ -123,6 +129,30 @@ sealed class SteamRelay : IDisposable
         SteamNetworking.CloseP2PSessionWithUser(ev.m_steamIDRemote);
     }
 
+    // Pull the immediate Steam friends list (name + online state). Called only on the
+    // pump thread. "Online" is any non-offline persona state. ponytail: shows ALL Steam
+    // friends, not just those playing PTO; rich-presence filtering (who is in PTO now)
+    // needs SetRichPresence on AppID 480, add if the list gets noisy.
+    void RefreshFriends()
+    {
+        try
+        {
+            int n = SteamFriends.GetFriendCount(EFriendFlags.k_EFriendFlagImmediate);
+            var list = new List<FriendInfo>(Math.Max(0, n));
+            for (int i = 0; i < n; i++)
+            {
+                var id = SteamFriends.GetFriendByIndex(i, EFriendFlags.k_EFriendFlagImmediate);
+                var state = SteamFriends.GetFriendPersonaState(id);
+                list.Add(new FriendInfo(
+                    SteamFriends.GetFriendPersonaName(id),
+                    id.m_SteamID,
+                    state != EPersonaState.k_EPersonaStateOffline));
+            }
+            Friends = list.ToArray();
+        }
+        catch { /* Steam hiccup: keep the previous snapshot */ }
+    }
+
     internal void Forget(ulong peer) => _conns.TryRemove(peer, out _);
 
     public void Dispose()
@@ -132,6 +162,9 @@ sealed class SteamRelay : IDisposable
         SteamAPI.Shutdown();
     }
 }
+
+// One Steam friend for the launcher GUI (name + SteamID64 + online flag).
+readonly record struct FriendInfo(string Name, ulong SteamId, bool Online);
 
 // One peer session as a duplex Stream. Writes are reliable P2P packets; reads drain a
 // channel the SteamRelay pump fills. Reliable+ordered, so bytes arrive intact and in
