@@ -8,9 +8,11 @@
     <AssemblyName>ptolaunch</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- WinForms hosts the native launcher window (no-arg / `gui`). Console verbs
-         (play/check/demo/...) still work; only the window path opens a window. -->
-    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF hosts the launcher window (MainWindow.xaml), editable in Visual Studio's / Blend's
+         visual designer. Program.Main stays the entry point (verb dispatch); the window runs on
+         its own STA thread, so no App.xaml ApplicationDefinition is generated. -->
+    <UseWPF>true</UseWPF>
+    <StartupObject>PtoLauncher.Program</StartupObject>
     <!-- x64 so it shares one .NET 10 runtime with the server. Uses steam_api64.dll
          (Steamworks.NET win-x64). The game is a separate 32-bit process with its own
          steam_api.dll, so the launcher's arch is independent of it. -->
@@ -20,6 +22,12 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Steamworks.NET" Version="2024.8.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The WPF (WindowsDesktop) SDK trims the default implicit usings; the launcher backend
+         assumes these (it was written under the plain SDK). Restore them project-wide. -->
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
   </ItemGroup>
   <ItemGroup>
     <!-- steam_api64.dll must sit beside the exe; steam_appid.txt=480 lets Init run

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -37,8 +38,8 @@ static class Program
         switch (verb)
         {
             case "":    // no args: double-clicked exe -> the windowed launcher
-            case "gui": // windowed launcher: minimal Play/Update window
-                return LauncherWindow.Run();
+            case "gui": // windowed launcher: WPF Play/Update window (MainWindow.xaml)
+                return MainWindow.Run();
             case "play": // symmetric matchmaking: queue, pair, auto-elect authority
                 return await PlayAsync();
             case "check": // preflight: Steam + Firebase + server, one line each
