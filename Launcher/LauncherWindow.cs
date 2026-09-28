@@ -112,9 +112,36 @@ sealed class LauncherWindow : Form
         Controls.Add(_gear);
         Controls.Add(_status);
 
-        // Initial state from detection + saved preference.
+        // Absorbs what play.bat used to do: make the Firebase URL available to both this
+        // process (MetaClient) and the spawned server, so online matchmaking works with no
+        // wrapper script. Then initial state from detection + saved preference.
+        EnsureFirebaseEnv();
         bool? pref = LoadOnlinePref();
         RecomputeState(pref);
+    }
+
+    // If PTO_FIREBASE_URL is not already set, look for a firebase.txt in the bundle (beside the
+    // exe, then up toward the package root where testers drop it) and export its URL, so the
+    // launcher's MetaClient AND the child PtoServer (which inherits this env) both see it. No
+    // firebase.txt just means online is unavailable; campaign/offline are unaffected.
+    static void EnsureFirebaseEnv()
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PTO_FIREBASE_URL"))) return;
+            for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
+            {
+                var cand = Path.Combine(d.FullName, "firebase.txt");
+                if (File.Exists(cand))
+                {
+                    var url = File.ReadAllText(cand).Trim();
+                    if (!string.IsNullOrWhiteSpace(url)) Environment.SetEnvironmentVariable("PTO_FIREBASE_URL", url);
+                    return;
+                }
+                if (d.Parent == null || d.Name.StartsWith("PTO_C151_P2P_Playtest")) break; // stop at the bundle root
+            }
+        }
+        catch (Exception ex) { Console.WriteLine($"launcher: firebase.txt lookup skipped ({ex.Message})"); }
     }
 
     // ---- online/offline state -------------------------------------------------------------
