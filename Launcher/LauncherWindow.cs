@@ -294,6 +294,8 @@ sealed class LauncherWindow : Form
         if (File.Exists(beside)) return beside;
         for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
         {
+            var pkg = Path.Combine(d.FullName, "game", "ptoc.exe"); // playtest package: launcher/ sibling game/
+            if (File.Exists(pkg)) return pkg;
             var cand = Path.Combine(d.FullName, "Clients", "Steam_Ver-PTO-C", "ptoc.exe");
             if (File.Exists(cand)) return cand;
         }

@@ -605,6 +605,7 @@ static class Program
         if (File.Exists(beside)) return beside;
         for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
             foreach (var rel in new[] { Path.Combine("PtoServer.exe"),
+                                        Path.Combine("server", "PtoServer.exe"), // playtest package: launcher/ sibling server/
                                         Path.Combine("bin", "Release", "net10.0", "PtoServer.exe"),
                                         Path.Combine("PTO_C151_Server", "PtoServer.exe"),
                                         Path.Combine("PTO_C151_Server", "bin", "Release", "net10.0", "PtoServer.exe") })
