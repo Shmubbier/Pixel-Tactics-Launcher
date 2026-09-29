@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using DiscordRPC;
 
 namespace PtoLauncher;
@@ -37,20 +38,42 @@ sealed class DiscordPresence
     // Both come from launcher settings; empty appId disables presence entirely.
     public void Init(string? appId, string? largeKey)
     {
-        if (string.IsNullOrWhiteSpace(appId)) { Console.WriteLine("discord: no app id set; rich presence disabled"); return; }
+        if (string.IsNullOrWhiteSpace(appId)) { Log("no app id set; rich presence disabled"); return; }
         if (!string.IsNullOrWhiteSpace(largeKey)) _largeKey = largeKey!;
         try
         {
             lock (_lock)
             {
                 _client = new DiscordRpcClient(appId);
+                // Lachee's own connection log -> a file we can inspect, plus concise event lines.
+                try { _client.Logger = new DiscordRPC.Logging.FileLogger(LogPath()) { Level = DiscordRPC.Logging.LogLevel.Info }; } catch { }
+                _client.OnReady += (_, e) => Log("ready: connected as " + e.User.Username);
+                _client.OnConnectionEstablished += (_, e) => Log("pipe connected (" + e.ConnectedPipe + ")");
+                _client.OnConnectionFailed += (_, e) => Log("connection FAILED (pipe " + e.FailedPipe + ") - is Discord running?");
+                _client.OnError += (_, e) => Log("error: " + e.Message);
+                _client.OnPresenceUpdate += (_, e) => Log("presence updated: " + (e.Presence?.Details ?? "(cleared)"));
                 _client.Initialize();
                 _sessionStart = DateTime.UtcNow;
             }
+            Log("init: client created for app " + appId + ", Initialize() returned");
             SetMenu();
-            Console.WriteLine("discord: rich presence enabled");
         }
-        catch (Exception ex) { Console.WriteLine($"discord: could not start rich presence ({ex.Message})"); _client = null; }
+        catch (Exception ex) { Log("could not start rich presence: " + ex); _client = null; }
+    }
+
+    static string LogPath()
+    {
+        string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ptoc-launcher");
+        try { Directory.CreateDirectory(dir); } catch { }
+        return Path.Combine(dir, "discord.log");
+    }
+
+    // Console (launcher log panel) + a diagnostic file, so RPC issues are inspectable after the fact.
+    static void Log(string msg)
+    {
+        string line = "[" + DateTime.Now.ToString("HH:mm:ss") + "] discord: " + msg;
+        Console.WriteLine(line);
+        try { File.AppendAllText(LogPath(), line + Environment.NewLine); } catch { }
     }
 
     public void Shutdown()
@@ -121,6 +144,7 @@ sealed class DiscordPresence
             if (_client == null) return;
             try
             {
+                Log("SetPresence -> \"" + details + "\" / \"" + (state ?? "") + "\"");
                 _client.SetPresence(new RichPresence
                 {
                     Details = details,
