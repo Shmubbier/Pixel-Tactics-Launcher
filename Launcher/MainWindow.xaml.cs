@@ -57,7 +57,7 @@ public partial class MainWindow : Window
         // Force a full process exit when the window closes, so the launcher never lingers in the
         // background holding the game port (background accept loop / relay threads could otherwise
         // keep it alive). The spawned PtoServer is a separate process and survives for reuse.
-        Closed += (_, _) => Environment.Exit(0);
+        Closed += (_, _) => { Program.Discord.Shutdown(); Environment.Exit(0); };
         // Pipe Console (and stderr) into the log panel: no separate console window.
         var writer = new ConsoleLogWriter(this);
         Console.SetOut(writer);
@@ -65,7 +65,28 @@ public partial class MainWindow : Window
         // Absorbs what play.bat did: expose the Firebase URL to this process (MetaClient) and
         // the spawned server. Then initial online/offline state from detection + saved preference.
         EnsureFirebaseEnv();
+        // Discord Rich Presence: reads the Discord app id (+ optional large-image asset key) from the
+        // launcher settings; no-op if unset. Driven by the sniffed game<->server opcodes.
+        Program.Discord.Init(ReadSetting("discord_app_id"), ReadSetting("discord_large_key"));
         RecomputeState(LoadOnlinePref());
+    }
+
+    // Read one "key=value" line from the launcher settings.ini (best-effort; null if absent).
+    static string? ReadSetting(string key)
+    {
+        try
+        {
+            string path = PrefPath();
+            if (!File.Exists(path)) return null;
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.StartsWith(key + "=", StringComparison.OrdinalIgnoreCase))
+                    return line.Substring(key.Length + 1).Trim();
+            }
+        }
+        catch { }
+        return null;
     }
 
     // ---- online/offline state -------------------------------------------------------------

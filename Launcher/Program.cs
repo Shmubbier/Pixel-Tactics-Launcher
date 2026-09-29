@@ -25,6 +25,11 @@ static class Program
     const byte OpBattleEnd = 3;  // server -> client: battle finished (the "match over" signal)
     const byte OpLogin = 46;     // client -> server: login (captured to replay onto the host)
     const byte OpLoaded = 48;    // server -> client: login flow done, door open -> lobby
+    const byte OpStartStage = 55;// client -> server: start a campaign stage [deckId u8][sid u16] (Discord presence)
+    const byte OpAddDeck = 47;   // server -> client: a deck [deckId u8][name \0][back u16][land u16][31x card u16] (Discord presence)
+
+    // Discord Rich Presence, fed by the sniffed opcodes below. No-op unless a Discord app id is configured.
+    internal static readonly DiscordPresence Discord = new DiscordPresence();
 
     [System.Runtime.InteropServices.DllImport("kernel32.dll")]
     static extern bool AttachConsole(int dwProcessId);
@@ -312,21 +317,25 @@ static class Program
     static async Task<SteamConnectionStream?> RunLocalSessionAsync(TcpClient game, TcpClient server, MetaClient meta, OnlineState online)
     {
         using var localCts = new CancellationTokenSource();
-        var loginSniff = new OpcodeSniffer(OpLogin, pkt => online.LoginPacket = pkt, repeat: true);
+        var loginSniff = new OpcodeSniffer(OpLogin, pkt => { online.LoginPacket = pkt; Discord.OnLogin(); }, repeat: true);
         var handoff = new TaskCompletionSource<SteamConnectionStream?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var queueSniff = new OpcodeSniffer(OpQueue, pkt => { online.QueuePacket = pkt; _ = GoOnlineAsync(meta, online, game, handoff); });
+        var queueSniff = new OpcodeSniffer(OpQueue, pkt => { online.QueuePacket = pkt; Discord.OnQueue(pkt); _ = GoOnlineAsync(meta, online, game, handoff); });
         online.QueueSniff = queueSniff;
         var endSniff = new OpcodeSniffer(OpBattleEnd, _ =>
         {
+            Discord.OnBattleEnd();
             if (online.EndHosting())
             {
                 queueSniff.Rearm();
                 Console.WriteLine("match over; back to passive offline, ready for another match.");
             }
         }, repeat: true);
+        // Discord presence: campaign stage (game->server) and the deck list (server->game, at login).
+        var stageSniff = new OpcodeSniffer(OpStartStage, pkt => Discord.OnStartStage(pkt), repeat: true);
+        var deckSniff = new OpcodeSniffer(OpAddDeck, pkt => Discord.OnAddDeck(pkt), repeat: true);
 
         var pump = PumpDualSniffAsync(game.GetStream(), server.GetStream(),
-                                      new[] { loginSniff, queueSniff }, new[] { endSniff }, localCts);
+                                      new[] { loginSniff, queueSniff, stageSniff }, new[] { endSniff, deckSniff }, localCts);
         var done = await Task.WhenAny(pump, handoff.Task);
         if (done == handoff.Task && handoff.Task.Result is SteamConnectionStream peer)
         {
