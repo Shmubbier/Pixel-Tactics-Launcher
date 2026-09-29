@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PtoLauncher;
@@ -144,7 +145,12 @@ static class Program
         {
             var cand = new TcpListener(IPAddress.Loopback, GamePort);
             if (TryStart(cand)) { l = cand; break; }
-            if (attempt == 0) { Console.WriteLine($"port {GamePort} is in use; clearing stale launcher instances..."); KillOtherLaunchers(); }
+            if (attempt == 0)
+            {
+                Console.WriteLine($"port {GamePort} is in use; clearing stale launcher instances...");
+                KillOtherLaunchers();          // by name (also clears sibling launchers)
+                KillProcessOnPort(GamePort);   // by port owner (catches leftovers a name match misses)
+            }
             await Task.Delay(400);
         }
         if (l == null)
@@ -182,6 +188,60 @@ static class Program
             }
         }
         catch { }
+    }
+
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    static extern uint GetExtendedTcpTable(IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int tableClass, int reserved);
+    const int AF_INET = 2, TCP_TABLE_OWNER_PID_ALL = 5;
+
+    // Name-independent: find whatever process currently OWNS the given local TCP port and kill it,
+    // then wait for it to exit. This clears a leftover that KillOtherLaunchers misses - a launcher
+    // from an OLD build (different image name), a process launched via `dotnet run`, or anything else
+    // squatting the port - since we match by the socket's owning PID, not the process name. Never
+    // kills self. Uses GetExtendedTcpTable (iphlpapi) so there is no netstat child process/window.
+    static void KillProcessOnPort(int port)
+    {
+        try
+        {
+            int size = 0;
+            GetExtendedTcpTable(IntPtr.Zero, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0); // size query
+            if (size <= 0) return;
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (GetExtendedTcpTable(buf, ref size, false, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) != 0) return;
+                int n = Marshal.ReadInt32(buf);
+                int me = Environment.ProcessId;
+                var rows = IntPtr.Add(buf, 4);
+                for (int i = 0; i < n; i++)
+                {
+                    var row = IntPtr.Add(rows, i * 24);          // sizeof(MIB_TCPROW_OWNER_PID) = 24
+                    int rawPort = Marshal.ReadInt32(row, 8);      // dwLocalPort (network byte order, low WORD)
+                    int localPort = ((rawPort & 0xFF) << 8) | ((rawPort >> 8) & 0xFF);
+                    int pid = Marshal.ReadInt32(row, 20);         // dwOwningPid
+                    if (localPort != port || pid == 0 || pid == me) continue;
+                    try
+                    {
+                        var p = System.Diagnostics.Process.GetProcessById(pid);
+                        // Only ever kill a leftover launcher of OURS. Anything else on this port
+                        // (e.g. adb.exe, which grabs ephemeral ports for its own loopback channels)
+                        // is not ours to kill - name it so the user can free it themselves.
+                        if (string.Equals(p.ProcessName, "ptolaunch", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"closing a leftover launcher holding port {port} (pid {pid})");
+                            p.Kill(); p.WaitForExit(3000);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"port {port} is held by {p.ProcessName} (pid {pid}), which is not a launcher - close that app; the game needs this port.");
+                        }
+                    }
+                    catch (Exception ex) { Console.WriteLine($"could not inspect pid {pid} on port {port}: {ex.Message}"); }
+                }
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+        catch (Exception ex) { Console.WriteLine($"port-owner lookup failed: {ex.Message}"); }
     }
 
     // Route one game connection. Once we've been elected the guest, the game's

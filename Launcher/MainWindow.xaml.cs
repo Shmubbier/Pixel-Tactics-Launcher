@@ -54,6 +54,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Force a full process exit when the window closes, so the launcher never lingers in the
+        // background holding the game port (background accept loop / relay threads could otherwise
+        // keep it alive). The spawned PtoServer is a separate process and survives for reuse.
+        Closed += (_, _) => Environment.Exit(0);
         // Pipe Console (and stderr) into the log panel: no separate console window.
         var writer = new ConsoleLogWriter(this);
         Console.SetOut(writer);
