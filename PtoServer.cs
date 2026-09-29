@@ -183,7 +183,8 @@ namespace PtoServer
 
     class Program
     {
-        static int Port = 51338;
+        static int Port = 15338;   // default listen port (below the 49152+ ephemeral range; matches the
+                                   // client's patched dial port). The launcher overrides it with --port 15339.
         const ushort ClientVersion = 72;
         static bool Verbose = true;
         static bool PacketLog = true;

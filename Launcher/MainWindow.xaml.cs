@@ -19,7 +19,7 @@ namespace PtoLauncher;
 // the game (campaign/bot); only matchmaking is skipped. Update-check is a stub (UpdateAvailable).
 public partial class MainWindow : Window
 {
-    const int GamePort = 51338;   // the port PlayAsync's proxy binds; the game dials it
+    const int GamePort = 15338;   // the port PlayAsync's proxy binds; the game dials it (client patch 24)
     const double CollapsedH = 320, ExpandedH = 540;
 
     readonly OnlineState _online = new();

@@ -18,8 +18,9 @@ namespace PtoLauncher;
 // there, pump bytes" (ServeAsync / PumpAsync), unchanged.
 static class Program
 {
-    const int GamePort = 51338;  // loopback port the game dials (settings.ini IP=127.0.0.1); the launcher proxy
-    const int LocalPort = 51339; // the local PtoServer sits here; the proxy forwards GamePort -> here
+    const int GamePort = 15338;  // loopback port the game dials (client patch 24; below the 49152+ ephemeral
+                                 // range so adb/browsers/etc. cannot auto-grab it). The launcher proxy binds it.
+    const int LocalPort = 15339; // the local PtoServer sits here; the proxy forwards GamePort -> here
     const byte OpQueue = 0;      // client -> server: join online matchmaking (the "go online" trigger)
     const byte OpBattleEnd = 3;  // server -> client: battle finished (the "match over" signal)
     const byte OpLogin = 46;     // client -> server: login (captured to replay onto the host)
