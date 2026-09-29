@@ -42,6 +42,7 @@ namespace PtoServer
         public const byte Loaded  = 48;
         public const byte Ping    = 52;
         public const byte Stages  = 60;
+        public const byte Unlock  = 61;  // "You have unlocked X" toast (container_unlock) [unlocktype u8][uid u16]; utype 0=stage,1=card,2=back,3=land. COSMETIC only - grant ownership with AddCard.
         public const byte Orbs    = 62;  // battle: set your own orb count (container_orbs, u8)
         public const byte OrbsGet = 63;  // battle: opponent's orb count (cosmetic)
 
@@ -459,7 +460,7 @@ namespace PtoServer
         }
 
         const int CardDbCount = 232;
-        const int BackCount   = 11;
+        const int BackCount   = 12;  // client __back_database has 12 (0-11); id 11 "Dark" (World 3 hard reward)
         const int LandCount   = 5;
         const int StageCount  = 76;  // Steam build: Deck Test + 3 worlds (25 nodes). Client reads exactly `stagesize` entries.
         const byte CardCopies = 3;
@@ -484,27 +485,39 @@ namespace PtoServer
 
         static void SendAccountData(NetworkStream ns, string username)
         {
+            // Ownership gate: everything is owned by default EXCEPT campaign-gated items - the AI-leader cards
+            // (normal + holo) of every campaign node, card backs 9/10/11, and lands 2/3/4 - which are granted
+            // only once earned. Earned ownership is derived from the completed-stage set (no separate store).
+            var completed = StageStore.Completed(username);
+            HashSet<int> earnedCards = new HashSet<int>(), earnedBacks = new HashSet<int>(), earnedLands = new HashSet<int>();
+            CampaignRewards(completed, earnedCards, earnedBacks, earnedLands);
+
             var ms = new MemoryStream();
+            int nCards = 0, nBacks = 0, nLands = 0;
             for (int id = 0; id < CardDbCount; id++)
             {
+                bool gatedLeader = _campaignLeaderReals.Contains(id / 2); // both normal (real*2) and holo (real*2+1)
+                if (gatedLeader && !earnedCards.Contains(id)) continue;   // locked until this node is beaten
                 byte[] p = new PacketWriter()
                     .WriteBool(false).WriteBool(false).WriteU16((ushort)id).WriteU8(CardCopies)
                     .Frame(Op.AddCard);
-                ms.Write(p, 0, p.Length);
+                ms.Write(p, 0, p.Length); nCards++;
             }
             for (int id = 0; id < BackCount; id++)
             {
+                if (!(IsStarterBack(id) || earnedBacks.Contains(id))) continue; // 2/3 admin/event, 9/10/11 earned
                 byte[] p = new PacketWriter()
                     .WriteBool(true).WriteBool(false).WriteU16((ushort)id).WriteU8(1)
                     .Frame(Op.AddCard);
-                ms.Write(p, 0, p.Length);
+                ms.Write(p, 0, p.Length); nBacks++;
             }
             for (int id = 0; id < LandCount; id++)
             {
+                if (!(IsStarterLand(id) || earnedLands.Contains(id))) continue; // 2/3/4 earned
                 byte[] p = new PacketWriter()
                     .WriteBool(false).WriteBool(true).WriteU16((ushort)id).WriteU8(1)
                     .Frame(Op.AddCard);
-                ms.Write(p, 0, p.Length);
+                ms.Write(p, 0, p.Length); nLands++;
             }
 
             Deck[] decks = DeckStore.Load(username);
@@ -525,9 +538,9 @@ namespace PtoServer
 
             byte[] blob = ms.ToArray();
             Send(ns, blob);
-            Log("-> account data: " + CardDbCount + " cards + " + BackCount + " backs + " +
-                LandCount + " lands + " + deckCount + " decks + " + StageCount + " stages (" +
-                blob.Length + " bytes)");
+            Log("-> account data: " + nCards + "/" + CardDbCount + " cards + " + nBacks + "/" + BackCount +
+                " backs + " + nLands + "/" + LandCount + " lands (owned) + " + deckCount + " decks + " +
+                StageCount + " stages (" + blob.Length + " bytes)");
         }
 
         static void HandleDeckSave(byte[] payload, string username)
@@ -1501,6 +1514,94 @@ namespace PtoServer
             for (int dd = diff; dd <= 2; dd++)                                     // prev node cleared at >= this difficulty
                 if (completed.Contains(StageCompose(world, node - 1, dd))) return true;
             return false;
+        }
+
+        // ---- campaign unlock rewards (see docs/superpowers/specs/2026-09-29-pillar-d-unlock-rewards.md) ----
+        // A node's AI-leader card (real*2) is locked until that node is beaten on EASY; its holographic
+        // variant (real*2+1) until CHALLENGE. Card backs 9/10/11 unlock on clearing a world's HARD tier
+        // (Crest=W1, Scholar=W2, Dark=W3), lands 2/3/4 on all 24 stars of a world (Kingspeace/Argent/Barrens).
+        // Everything else - regular cards, non-campaign leaders, starter backs/lands - is always owned. All of
+        // this is DERIVED from the completed-stage set (StageStore); there is no separate ownership store.
+
+        // The reals used as campaign node leaders; their normal + holo cards are the gated leader rewards.
+        static readonly HashSet<int> _campaignLeaderReals = BuildCampaignLeaderReals();
+        static HashSet<int> BuildCampaignLeaderReals()
+        {
+            var s = new HashSet<int>();
+            foreach (int r in World1Leaders) s.Add(r);
+            foreach (int r in World2Leaders) s.Add(r);
+            foreach (int r in World3Leaders) s.Add(r);
+            return s;
+        }
+
+        // Starter card backs (account creation): Basic 1/2 + Green/Red/Blue/Orange/Yellow. 2 (Adminus) and
+        // 3 (Alpharite) are admin/event only (never campaign); 9/10/11 are campaign rewards.
+        static bool IsStarterBack(int id) { return id == 0 || id == 1 || (id >= 4 && id <= 8); }
+        // Starter lands (account creation): Datamatt, Training Woods. 2/3/4 are campaign rewards.
+        static bool IsStarterLand(int id) { return id == 0 || id == 1; }
+
+        // Fill the earned reward ownership (card ids, back ids, land ids) implied by a completed-stage set.
+        static void CampaignRewards(HashSet<int> done, HashSet<int> cards, HashSet<int> backs, HashSet<int> lands)
+        {
+            AddLeaderRewards(done, World1Leaders, 0, cards);
+            AddLeaderRewards(done, World2Leaders, 1, cards);
+            AddLeaderRewards(done, World3Leaders, 2, cards);
+            if (AllHardDone(done, 0)) backs.Add(9);   // Crest   (World 1 hard)
+            if (AllHardDone(done, 1)) backs.Add(10);  // Scholar (World 2 hard)
+            if (AllHardDone(done, 2)) backs.Add(11);  // Dark    (World 3 hard)
+            if (AllStarsDone(done, 0)) lands.Add(2);  // Kingspeace (World 1, all 24 stars)
+            if (AllStarsDone(done, 1)) lands.Add(3);  // Argent     (World 2)
+            if (AllStarsDone(done, 2)) lands.Add(4);  // Barrens    (World 3)
+        }
+
+        static void AddLeaderRewards(HashSet<int> done, int[] leaders, int world, HashSet<int> cards)
+        {
+            for (int node = 0; node < leaders.Length; node++)   // W3 also has node 8 (sids 73-75); its leader unlocks too
+            {
+                int real = leaders[node];
+                if (done.Contains(StageCompose(world, node, 0))) cards.Add(real * 2);      // easy -> leader
+                if (done.Contains(StageCompose(world, node, 2))) cards.Add(real * 2 + 1);  // challenge -> holo leader
+            }
+        }
+
+        // A world's HARD tier: the 8 core nodes (0-7) at difficulty 1.
+        static bool AllHardDone(HashSet<int> done, int world)
+        {
+            for (int node = 0; node < 8; node++) if (!done.Contains(StageCompose(world, node, 1))) return false;
+            return true;
+        }
+        // A world's 24 stars: the 8 core nodes at all 3 difficulties (W3's 9th node is bonus, not counted).
+        static bool AllStarsDone(HashSet<int> done, int world)
+        {
+            for (int node = 0; node < 8; node++)
+                for (int d = 0; d < 3; d++)
+                    if (!done.Contains(StageCompose(world, node, d))) return false;
+            return true;
+        }
+
+        // On a stage win: grant + toast every reward newly earned by this win (diff of before/after completion).
+        static void GrantNewRewards(NetworkStream ns, HashSet<int> before, HashSet<int> after)
+        {
+            HashSet<int> bc = new HashSet<int>(), bb = new HashSet<int>(), bl = new HashSet<int>();
+            HashSet<int> ac = new HashSet<int>(), ab = new HashSet<int>(), al = new HashSet<int>();
+            CampaignRewards(before, bc, bb, bl);
+            CampaignRewards(after, ac, ab, al);
+            foreach (int id in ac) if (!bc.Contains(id)) SendUnlock(ns, false, false, id, 1, CardCopies); // card/leader/holo
+            foreach (int id in ab) if (!bb.Contains(id)) SendUnlock(ns, true, false, id, 2, 1);           // back
+            foreach (int id in al) if (!bl.Contains(id)) SendUnlock(ns, false, true, id, 3, 1);           // land
+        }
+
+        // Grant ownership (Op.AddCard updates the collection) AND show the "You have unlocked X" toast
+        // (Op.Unlock is cosmetic-only). Both are needed. utype: 1=card, 2=back, 3=land.
+        static void SendUnlock(NetworkStream ns, bool back, bool land, int id, byte utype, byte amt)
+        {
+            try
+            {
+                Send(ns, new PacketWriter().WriteBool(back).WriteBool(land).WriteU16((ushort)id).WriteU8(amt).Frame(Op.AddCard));
+                Send(ns, new PacketWriter().WriteU8(utype).WriteU16((ushort)id).Frame(Op.Unlock));
+                Log("  UNLOCK -> " + (back ? "back " : land ? "land " : "card ") + id);
+            }
+            catch { }
         }
 
         // op55: start a singleplayer campaign stage. Payload: [deckId u8][sid u16]. Starts a battle of the
@@ -2644,7 +2745,10 @@ namespace PtoServer
             // re-pushes the stages packet so the winner's star/next-node unlock updates without re-login.
             if (b != null && b.StageSid >= 0 && winner != null && !winner.IsBot)
             {
+                var before = StageStore.Completed(winner.User);
                 StageStore.Complete(winner.User, b.StageSid);
+                var after = StageStore.Completed(winner.User);
+                GrantNewRewards(winner.Ns, before, after);   // any newly-earned leader/holo/back/land -> grant + toast
                 try { Send(winner.Ns, BuildStagesPacket(winner.User)); } catch { }
             }
             if (winner != null)
@@ -6413,7 +6517,10 @@ namespace PtoServer
         static readonly int[] _finished = { 56, 58, 60, 62, 64, 68, 70, 72, 78, 84, 86, 88, 92, 94, 96, 98, 100 };
         static Deck DefaultDeck()
         {
-            var d = new Deck { Id = 0, Flag = false, Back = 1, Land = 2, Name = "Arena Deck" };
+            // Back 1 (Basic 2) and Land 1 (Training Woods) are both account-creation starters, and leader
+            // card 2 (real 1) is a non-campaign starter leader - so this default deck is valid for a brand-new
+            // account under the ownership gate. (Land 2 = Kingspeace is now a World-1 reward, so not used here.)
+            var d = new Deck { Id = 0, Flag = false, Back = 1, Land = 1, Name = "Arena Deck" };
             d.Cards[0] = 2; // leader
             for (int i = 0; i < 30; i++) d.Cards[i + 1] = (ushort)_finished[i % _finished.Length];
             return d;
