@@ -136,19 +136,21 @@ static class Program
             try { var r = new SteamRelay(); r.Init(); online.Relay = r; Console.WriteLine("steam: relay warming up (ready by match time)"); }
             catch (Exception ex) { Console.WriteLine($"steam: relay not started yet ({ex.Message}); will init on first match"); }
 
-        var l = new TcpListener(IPAddress.Loopback, GamePort);
-        if (!TryStart(l))
+        // Bind GamePort, clearing any stale launcher that still holds it. GamePort is held only by
+        // another ptolaunch (a previous run that did not exit); kill those, wait for them to die,
+        // and retry with a fresh listener each time (a failed Start leaves the old one unusable).
+        TcpListener? l = null;
+        for (int attempt = 0; attempt < 8 && l == null; attempt++)
         {
-            // GamePort is held, almost always by a stale ptolaunch from a previous run that
-            // did not exit. Kill it (its spawned server survives and is reused) and retry.
-            Console.WriteLine($"port {GamePort} is in use; clearing a stale launcher instance...");
-            KillOtherLaunchers();
-            await Task.Delay(800);
-            if (!TryStart(l))
-            {
-                Console.WriteLine($"could not free port {GamePort}. Close any other launcher window, then run play again.");
-                return 1;
-            }
+            var cand = new TcpListener(IPAddress.Loopback, GamePort);
+            if (TryStart(cand)) { l = cand; break; }
+            if (attempt == 0) { Console.WriteLine($"port {GamePort} is in use; clearing stale launcher instances..."); KillOtherLaunchers(); }
+            await Task.Delay(400);
+        }
+        if (l == null)
+        {
+            Console.WriteLine($"could not free port {GamePort}. Close any other launcher window, then press Play again.");
+            return 1;
         }
         while (true)
         {
@@ -164,15 +166,20 @@ static class Program
         catch (SocketException) { return false; }
     }
 
-    // Single instance: kill any other ptolaunch process (not its spawned PtoServer child, which
-    // survives on LocalPort and gets reused). Frees GamePort left held by a stale run.
+    // Single instance: kill any other ptolaunch process and WAIT for it to actually exit, so the
+    // OS releases GamePort before we retry the bind. Uses Kill() (not the process tree) on purpose:
+    // the stale launcher's spawned PtoServer child survives on LocalPort and gets reused.
     static void KillOtherLaunchers()
     {
         try
         {
             int me = Environment.ProcessId;
             foreach (var p in System.Diagnostics.Process.GetProcessesByName("ptolaunch"))
-                if (p.Id != me) { try { p.Kill(); } catch { } }
+            {
+                if (p.Id == me) continue;
+                try { p.Kill(); p.WaitForExit(3000); Console.WriteLine($"closed a stale launcher (pid {p.Id})"); }
+                catch (Exception ex) { Console.WriteLine($"could not close launcher pid {p.Id}: {ex.Message}"); }
+            }
         }
         catch { }
     }
@@ -630,11 +637,29 @@ static class Program
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false };
+            // CreateNoWindow: PtoServer.exe is a console app, so spawning it would otherwise pop a
+            // separate command-prompt window. Suppress it and redirect its output into our own
+            // Console (which the windowed launcher pipes into its log panel, the console verbs to
+            // the terminal), so the server's log lives in one place instead of a second window.
+            var psi = new System.Diagnostics.ProcessStartInfo(exe)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
             psi.ArgumentList.Add("--port"); psi.ArgumentList.Add(port.ToString());
             var dir = Path.GetDirectoryName(Path.GetFullPath(exe));
             if (!string.IsNullOrEmpty(dir)) psi.WorkingDirectory = dir;
-            return System.Diagnostics.Process.Start(psi);
+            var proc = System.Diagnostics.Process.Start(psi);
+            if (proc != null)
+            {
+                proc.OutputDataReceived += (_, e) => { if (e.Data != null) Console.WriteLine("[server] " + e.Data); };
+                proc.ErrorDataReceived += (_, e) => { if (e.Data != null) Console.WriteLine("[server] " + e.Data); };
+                proc.BeginOutputReadLine();
+                proc.BeginErrorReadLine();
+            }
+            return proc;
         }
         catch (Exception ex) { Console.WriteLine($"could not start server '{exe}': {ex.Message}"); return null; }
     }
