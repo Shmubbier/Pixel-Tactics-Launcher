@@ -6563,6 +6563,48 @@ namespace PtoServer
         }
     }
 
+    // Lightweight tamper-resistance for the local flat-file stores (stages.txt / ranks.txt). Wrap()
+    // appends an HMAC-SHA256 trailer over the file body keyed by an embedded key; Read() rejects a body
+    // whose trailer does not verify (returns it as tampered so the caller ignores the hand-edited data).
+    // Ceiling: the server runs on the player's OWN machine, so the key ships with the data it protects -
+    // this stops a casual text-editor edit, not a determined user with the binary (real anti-cheat is
+    // server-side validation). A legacy file with no trailer is accepted once and re-signed on the next
+    // write, so upgrading from an older build never wipes progress.
+    static class SignedStore
+    {
+        static readonly byte[] _key;
+        static SignedStore()
+        {
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            _key = sha.ComputeHash(Encoding.UTF8.GetBytes("PtoC151-store-hmac-v1"));
+        }
+        const string Tag = "\n#h=";
+
+        static string Mac(string body)
+        {
+            using var h = new System.Security.Cryptography.HMACSHA256(_key);
+            return Convert.ToBase64String(h.ComputeHash(Encoding.UTF8.GetBytes(body)));
+        }
+
+        public static string Wrap(string body) => body + Tag + Mac(body) + "\n";
+
+        // The verified body, or null if the file is missing. tampered=true means a trailer was present
+        // but did not match (caller ignores the data). No trailer => legacy file: returned as-is.
+        public static string Read(string path, out bool tampered)
+        {
+            tampered = false;
+            if (!File.Exists(path)) return null;
+            string text = File.ReadAllText(path);
+            int i = text.LastIndexOf(Tag, StringComparison.Ordinal);
+            if (i < 0) return text; // legacy unsigned file: accept, re-signed on next write
+            string body = text.Substring(0, i);
+            string sig = text.Substring(i + Tag.Length).Trim();
+            if (sig == Mac(body)) return body;
+            tampered = true;
+            return "";
+        }
+    }
+
     // Persistent ranked ladder: normalized user -> [rank, wins, losses], flat file data/ranks.txt
     // ("user|rank|wins|losses"). Rank is a personal climb-ladder position: the client draws
     // floor(5/rank) for its icon, so LOWER is better and rank must be >= 1. New players start at
@@ -6583,9 +6625,13 @@ namespace PtoServer
             _done = new Dictionary<string, HashSet<int>>();
             try
             {
-                if (File.Exists(FilePath))
-                    foreach (string line in File.ReadAllLines(FilePath))
+                string body = SignedStore.Read(FilePath, out bool tampered);
+                if (tampered) Console.WriteLine("StageStore: signature mismatch - ignoring hand-edited stages.txt");
+                if (body != null)
+                    foreach (string raw in body.Split('\n'))
                     {
+                        string line = raw.TrimEnd('\r');
+                        if (line.Length == 0) continue;
                         string[] f = line.Split('|');
                         if (f.Length < 2 || f[0].Length == 0) continue;
                         var set = new HashSet<int>();
@@ -6610,7 +6656,7 @@ namespace PtoServer
                     foreach (int sid in kv.Value) { if (!first) sb.Append(','); sb.Append(sid); first = false; }
                     sb.Append('\n');
                 }
-                File.WriteAllText(FilePath, sb.ToString());
+                File.WriteAllText(FilePath, SignedStore.Wrap(sb.ToString()));
             }
             catch (Exception e) { Console.WriteLine("StageStore save error: " + e.Message); }
         }
@@ -6662,9 +6708,13 @@ namespace PtoServer
             _rank = new Dictionary<string, int[]>();
             try
             {
-                if (File.Exists(FilePath))
-                    foreach (string line in File.ReadAllLines(FilePath))
+                string body = SignedStore.Read(FilePath, out bool tampered);
+                if (tampered) Console.WriteLine("RankStore: signature mismatch - ignoring hand-edited ranks.txt");
+                if (body != null)
+                    foreach (string raw in body.Split('\n'))
                     {
+                        string line = raw.TrimEnd('\r');
+                        if (line.Length == 0) continue;
                         string[] f = line.Split('|');
                         int r, w, l;
                         if (f.Length >= 4 && f[0].Length > 0 && int.TryParse(f[1], out r)
@@ -6684,7 +6734,7 @@ namespace PtoServer
                 foreach (var kv in _rank)
                     sb.Append(kv.Key).Append('|').Append(kv.Value[0]).Append('|')
                       .Append(kv.Value[1]).Append('|').Append(kv.Value[2]).Append('\n');
-                File.WriteAllText(FilePath, sb.ToString());
+                File.WriteAllText(FilePath, SignedStore.Wrap(sb.ToString()));
             }
             catch (Exception e) { Console.WriteLine("RankStore save error: " + e.Message); }
         }
