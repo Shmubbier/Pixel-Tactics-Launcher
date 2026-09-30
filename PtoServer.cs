@@ -3533,7 +3533,6 @@ namespace PtoServer
 
             PlayerState ps = b.P[mine.P];
             PlayerState opPs = b.P[1 - mine.P];
-            if (ps.ActionsRemaining <= 0) { Log("ORDER rejected: no actions remaining"); GrantAction(mine); return; }
 
             OrderEffect eff = OrderOf(cardId);
             Log("ORDER " + mine.Me.User + ": card " + cardId + " kind=" + eff.Kind + " amt=" + eff.Amount +
@@ -3544,6 +3543,8 @@ namespace PtoServer
                 GrantAction(mine);
                 return;
             }
+            // AP gate AFTER the free determination: a Free/Quick order can be played at 0 AP (fixes #8).
+            if (!eff.Free && ps.ActionsRemaining <= 0) { Log("ORDER rejected: no actions remaining"); GrantAction(mine); return; }
 
             // The client's positional targeting (o_type 0) lets you click EITHER board, but the effect
             // must land on the correct one. `grid` (isgrid) is 1 when the player clicked their OWN board,
@@ -4861,7 +4862,8 @@ namespace PtoServer
             if (b.Round <= 1) { Log("ATTACK rejected: Round 1 ceasefire"); GrantAction(mine); return; }
 
             PlayerState ps = b.P[mine.P];
-            if (ps.ActionsRemaining <= 0) { Log("ATTACK rejected: no actions remaining"); GrantAction(mine); return; }
+            // NB: the AP gate is deferred until AFTER the free/quick determination (per-spell seff.Free /
+            // per-attack freeAtk below), so a free action can be taken at 0 AP (fixes #8).
 
             // Fold ally auras into effective stats for BOTH sides before resolving combat.
             RecomputeAuras(b.P[mine.P]); RecomputeAuras(b.P[1 - mine.P]);
@@ -4908,6 +4910,8 @@ namespace PtoServer
                     if (q0 != null && q1 != null) SyncUnitStates(q0, q1, b);
                     return;
                 }
+                // AP gate AFTER the free determination: a Quick/Free spell can be cast at 0 AP (fixes #8).
+                if (!seff.Free && ps.ActionsRemaining <= 0) { Log("SPELL rejected: no actions remaining"); GrantAction(mine); return; }
                 // Khadath: Banish is "once per turn" per the card text; the client is supposed to gate the
                 // second cast but the server must be authoritative. Reject (refund, no-op) a repeat.
                 if (casterCard / 2 == 21 && ps.KhadathBanishedThisTurn)
@@ -5051,6 +5055,8 @@ namespace PtoServer
             // exhausts (HasAttackedThisWave), so it attacks only once/wave -- this just refunds the action.
             bool freeAtk = !attackerIsLeader && (attacker.Abilities & UnitAbility.FreeAttack) != 0;
             if (freeAtk) Log("  FREE ATTACK: (" + ax + "," + ay + ") attacks without spending an action");
+            // AP gate AFTER the free determination: a Free/Quick attack can be made at 0 AP (fixes #8).
+            if (!freeAtk && ps.ActionsRemaining <= 0) { Log("ATTACK rejected: no actions remaining"); GrantAction(mine); return; }
 
             // Uriah: "This LEADER cannot attack." Reject a leader-initiated attack for Uriah's owner.
             if (attackerIsLeader && ps.LeaderCard / 2 == 76)
@@ -5558,7 +5564,9 @@ namespace PtoServer
             // Immortality: a protected vanguard hero is never sent as dead (even at/over lethal damage),
             // so the client won't play its death animation; it shows at least 1 HP until protection ends.
             bool immVan = IsImmortalVanguard(b.P[ownerSlot.P], x);
-            bool dead = !immVan && (unit.IsCorpse || unit.Damage >= unit.Max);
+            // An actual corpse is ALWAYS dead; Immortality only prevents death from lethal DAMAGE, it must
+            // not resurrect a real corpse (that made a vanguard corpse "stand up then die" - #7).
+            bool dead = unit.IsCorpse || (!immVan && unit.Damage >= unit.Max);
             if (dead) unit.DeathSent = true;  // client now knows it's dead; never re-send (would replay the death anim)
             int curLife = dead ? 0 : Math.Max(immVan ? 1 : 0, unit.Max - unit.Damage);
             // Ready = alive, hasn't acted, not summon-sick (see SyncPlayerUnits). Must use `dead` (which
@@ -5608,7 +5616,7 @@ namespace PtoServer
             if (b == null || b.Over || !b.Started) return;
             if (mine.P != b.Active) { Log("MOVE from non-active player (ignored)"); return; }
             PlayerState ps = b.P[mine.P];
-            if (ps.ActionsRemaining <= 0) { Log("MOVE rejected: no actions remaining"); GrantAction(mine); return; }
+            if (!ps.RestructureFree && ps.ActionsRemaining <= 0) { Log("MOVE rejected: no actions remaining"); GrantAction(mine); return; } // Restructure = free move at 0 AP (#8)
 
             var r = new PacketReader(payload, 0);
             byte x1 = r.ReadU8(), y1 = r.ReadU8(), x2 = r.ReadU8(), y2 = r.ReadU8();
@@ -5689,7 +5697,7 @@ namespace PtoServer
             if (b == null || b.Over || !b.Started) return;
             if (mine.P != b.Active) { Log("CLEAR_CORPSE from non-active player (ignored)"); return; }
             PlayerState ps = b.P[mine.P];
-            if (ps.ActionsRemaining <= 0) { Log("CLEAR_CORPSE rejected: no actions remaining"); GrantAction(mine); return; }
+            if (!ps.RestructureFree && ps.ActionsRemaining <= 0) { Log("CLEAR_CORPSE rejected: no actions remaining"); GrantAction(mine); return; } // Restructure = free clear at 0 AP (#8)
 
             var r = new PacketReader(payload, 0);
             byte cx = r.ReadU8(), cy = r.ReadU8();
@@ -6224,8 +6232,8 @@ namespace PtoServer
                 // anim_wave_update's activate=1 refresh and paints the whole board exhausted.
                 // Render dead on lethal damage (or corpse) so the death animation plays during the
                 // turn, not in the wave-advance burst (see SendUnitUpdateToBoth). Corpses keep 0 HP.
-                bool immVanS = IsImmortalVanguard(ps, ux); // protected vanguard: never dead
-                bool unitDead = !immVanS && (u.IsCorpse || u.Damage >= u.Max);
+                bool immVanS = IsImmortalVanguard(ps, ux); // protected vanguard: never dead from lethal DAMAGE
+                bool unitDead = u.IsCorpse || (!immVanS && u.Damage >= u.Max); // a real corpse is always dead (#7)
                 // active must exclude dead/dying units (see SendUnitUpdateToBoth), else a corpse renders
                 // as a live, movable unit on the client.
                 bool unitActive = !unitDead && !u.HasAttackedThisWave && !u.RecruitedThisWave;
