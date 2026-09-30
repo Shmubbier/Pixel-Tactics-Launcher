@@ -65,9 +65,11 @@ public partial class MainWindow : Window
         // Absorbs what play.bat did: expose the Firebase URL to this process (MetaClient) and
         // the spawned server. Then initial online/offline state from detection + saved preference.
         EnsureFirebaseEnv();
-        // Discord Rich Presence: reads the Discord app id (+ optional large-image asset key) from the
-        // launcher settings; no-op if unset. Driven by the sniffed game<->server opcodes.
-        Program.Discord.Init(ReadSetting("discord_app_id"), ReadSetting("discord_large_key"));
+        // Discord Rich Presence: settings.ini overrides (dev), else the compiled-in default so a shipped
+        // bundle has a working app id. Driven by the sniffed game<->server opcodes.
+        Program.Discord.Init(
+            ReadSetting("discord_app_id") ?? EmbeddedConfig.DiscordAppId,
+            ReadSetting("discord_large_key") ?? EmbeddedConfig.DiscordLargeKey);
         RecomputeState(LoadOnlinePref());
     }
 
@@ -189,11 +191,14 @@ public partial class MainWindow : Window
                 if (File.Exists(cand))
                 {
                     var url = File.ReadAllText(cand).Trim();
-                    if (!string.IsNullOrWhiteSpace(url)) Environment.SetEnvironmentVariable("PTO_FIREBASE_URL", url);
-                    return;
+                    if (!string.IsNullOrWhiteSpace(url)) { Environment.SetEnvironmentVariable("PTO_FIREBASE_URL", url); return; }
+                    break; // present but empty -> fall through to the embedded default
                 }
                 if (d.Parent == null || d.Name.StartsWith("PTO_C151_P2P_Playtest")) break; // stop at the bundle root
             }
+            // No firebase.txt on disk (the shipped bundle carries none): use the compiled-in default.
+            var embedded = EmbeddedConfig.FirebaseUrl;
+            if (!string.IsNullOrWhiteSpace(embedded)) Environment.SetEnvironmentVariable("PTO_FIREBASE_URL", embedded);
         }
         catch (Exception ex) { Console.WriteLine($"launcher: firebase.txt lookup skipped ({ex.Message})"); }
     }
