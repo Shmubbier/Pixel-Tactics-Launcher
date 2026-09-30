@@ -31,6 +31,11 @@
     <Using Include="System.Net.Http" />
   </ItemGroup>
   <ItemGroup>
+    <!-- UI sprites (from the game's asset export), embedded as WPF resources and referenced from
+         MainWindow.xaml as /assets/<name>.png. -->
+    <Resource Include="assets\*.png" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- steam_api64.dll must sit beside the exe; steam_appid.txt=480 lets Init run
          without launching via Steam. Use the MODERN 64-bit dll that matches
          Steamworks.NET 2024.8.0 (has SteamNetworkingSockets012 for the relay): the

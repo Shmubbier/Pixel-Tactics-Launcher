@@ -20,7 +20,7 @@ namespace PtoLauncher;
 public partial class MainWindow : Window
 {
     const int GamePort = 15338;   // the port PlayAsync's proxy binds; the game dials it (client patch 24)
-    const double CollapsedH = 320, ExpandedH = 540;
+    const double CollapsedH = 420, ExpandedH = 640;
 
     readonly OnlineState _online = new();
     SteamRelay? _relay;           // warmed on Play when Online; null in Offline
@@ -101,7 +101,8 @@ public partial class MainWindow : Window
 
     void UpdateUi()
     {
-        PlayButton.Content = UpdateAvailable() ? "UPDATE" : "PLAY";
+        // PlayButton is image-templated (spr_ready_button_*), so its text Content is not shown.
+        // UpdateAvailable() is still a stub (always false); an "Update" state would need its own sprite.
         string line = _onlineMode ? "Online" : "Offline" + (string.IsNullOrEmpty(_reason) ? " (by choice)" : " - " + _reason);
         StatusText.Text = line + "     (gear to switch)";
     }

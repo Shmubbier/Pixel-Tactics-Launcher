@@ -27,3 +27,5 @@ PTO_C.exe
 D3DX9_43.dll
 win_dev.dll
 settings.ini
+.vs/
+Launcher/.vs/

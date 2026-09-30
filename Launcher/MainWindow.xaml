@@ -2,13 +2,14 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Pixel Tactics Online"
-        Height="320" Width="480"
+        Height="420" Width="480"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterScreen"
         Background="#14121C">
     <!-- Edit this file in Visual Studio's / Blend's visual designer. The code-behind
          (MainWindow.xaml.cs) wires the named controls; keep the x:Name values if you
-         restyle, and the event handler names (OnPlay/OnGear/OnToggleLog) if you rewire. -->
+         restyle, and the event handler names (OnPlay/OnGear/OnToggleLog) if you rewire.
+         Sprites live in assets/ (WPF Resource); pixel art uses NearestNeighbor scaling. -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -17,23 +18,50 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Top bar: settings gear -->
-        <Button x:Name="GearButton" Grid.Row="0" Content="&#x2699;"
-                Click="OnGear" ToolTip="Toggle Online / Offline"
-                Width="34" Height="34" Margin="0,10,10,0"
+        <!-- Top bar: settings gear (spr_ingame_settings_0, 32x32 native) -->
+        <Button x:Name="GearButton" Grid.Row="0" Click="OnGear" ToolTip="Toggle Online / Offline"
+                Width="32" Height="32" Margin="0,12,12,0"
                 HorizontalAlignment="Right" VerticalAlignment="Top"
-                FontSize="15" Foreground="#DCDCDC" Background="#242230"
-                BorderThickness="0" Cursor="Hand"/>
+                Background="Transparent" BorderThickness="0" Cursor="Hand">
+            <Image Source="/assets/spr_ingame_settings_0.png" Width="32" Height="32"
+                   RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+        </Button>
 
-        <!-- Center: title, PLAY, status -->
+        <!-- Center: logo, PLAY, status -->
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-            <TextBlock Text="PIXEL TACTICS ONLINE"
-                       FontSize="22" FontWeight="Bold" Foreground="#F2B134"
-                       HorizontalAlignment="Center" Margin="0,0,0,22"/>
-            <Button x:Name="PlayButton" Content="PLAY" Click="OnPlay"
-                    Width="220" Height="60" FontSize="18" FontWeight="Bold"
-                    Foreground="#111111" Background="#F2B134"
-                    BorderThickness="0" Cursor="Hand"/>
+            <!-- Logo (spr_logo_0, 384x144 native) -->
+            <Image Source="/assets/spr_logo_0.png" Width="384" Height="144"
+                   RenderOptions.BitmapScalingMode="NearestNeighbor"
+                   HorizontalAlignment="Center" Margin="0,0,0,28"/>
+
+            <!-- PLAY button: spr_ready_button_1 (up), swaps to spr_ready_button_0 while pressed.
+                 80x32 sprite drawn at 240x96 (exact 3x). -->
+            <Button x:Name="PlayButton" Click="OnPlay"
+                    Width="240" Height="96" Margin="0,0,0,6"
+                    HorizontalAlignment="Center"
+                    Background="Transparent" BorderThickness="0" Cursor="Hand">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="root" Background="Transparent">
+                            <Image x:Name="imgUp" Source="/assets/spr_ready_button_1.png"
+                                   Stretch="Fill" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                            <Image x:Name="imgDown" Source="/assets/spr_ready_button_0.png"
+                                   Stretch="Fill" RenderOptions.BitmapScalingMode="NearestNeighbor"
+                                   Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="imgUp" Property="Visibility" Value="Collapsed"/>
+                                <Setter TargetName="imgDown" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="root" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+
             <TextBlock x:Name="StatusText" Text=""
                        FontSize="12" Foreground="#DCDCDC"
                        HorizontalAlignment="Center" Margin="0,16,0,0"/>
