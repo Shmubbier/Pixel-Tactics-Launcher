@@ -263,9 +263,15 @@ public partial class MainWindow : Window
             if (_game != null)
             {
                 _game.EnableRaisingEvents = true;
-                _game.Exited += (_, _) => { SetStatus("Game closed. Ready to play again."); SetPlayEnabled(true); };
+                _game.Exited += (_, _) =>
+                {
+                    SetStatus("Game closed. Ready to play again.");
+                    SetPlayEnabled(true);
+                    RunOnUi(() => { WindowState = WindowState.Normal; Activate(); }); // pop back up when the game closes
+                };
             }
             SetStatus("In game.");
+            WindowState = WindowState.Minimized; // auto-minimize the launcher once the game is running
         }
         catch (Exception ex)
         {
@@ -301,6 +307,12 @@ public partial class MainWindow : Window
     static bool UpdateAvailable() => false;
 
     // ---- ui + log helpers -----------------------------------------------------------------
+    void RunOnUi(Action a)
+    {
+        if (Dispatcher.CheckAccess()) a();
+        else Dispatcher.BeginInvoke(a);
+    }
+
     void SetStatus(string text)
     {
         if (Dispatcher.CheckAccess()) StatusText.Text = text;

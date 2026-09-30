@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Pixel Tactics Online"
         Height="420" Width="480"
-        ResizeMode="NoResize"
+        ResizeMode="CanMinimize"
         WindowStartupLocation="CenterScreen"
         Background="#14121C">
     <!-- Edit this file in Visual Studio's / Blend's visual designer. The code-behind
@@ -29,15 +29,15 @@
 
         <!-- Center: logo, PLAY, status -->
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center">
-            <!-- Logo (spr_logo_0, 384x144 native) -->
-            <Image Source="/assets/spr_logo_0.png" Width="384" Height="144"
+            <!-- Logo (spr_logo_0, 384x144 native). Keep the 384:144 (8:3) ratio to avoid distortion. -->
+            <Image Source="/assets/spr_logo_0.png" Width="360" Height="135"
                    RenderOptions.BitmapScalingMode="NearestNeighbor"
                    HorizontalAlignment="Center" Margin="0,0,0,28"/>
 
             <!-- PLAY button: spr_ready_button_1 (up), swaps to spr_ready_button_0 while pressed.
-                 80x32 sprite drawn at 240x96 (exact 3x). -->
+                 80x32 sprite drawn at 160x64 (exact 2x -> crisp). Use multiples of 80x32 to stay sharp. -->
             <Button x:Name="PlayButton" Click="OnPlay"
-                    Width="240" Height="96" Margin="0,0,0,6"
+                    Width="160" Height="64" Margin="0,0,0,6"
                     HorizontalAlignment="Center"
                     Background="Transparent" BorderThickness="0" Cursor="Hand">
                 <Button.Template>
