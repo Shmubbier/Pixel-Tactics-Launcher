@@ -939,8 +939,11 @@ namespace PtoServer
                     foreach (int k in keys) DamageEnemyAt(opPs, k / 10, k % 10, 3);
                     opPs.LeaderLife -= 1;
                     Log("  LEADER (Lixis): 3 to all rival heroes + 1 to rival leader (rival leader life " + opPs.LeaderLife + ")");
-                    if (ps.LeaderCard / 2 == 5 || opPs.LeaderCard / 2 == 5)
-                        ProcessImmediateDeaths(opPs, opp, own, b);
+                    // Always sweep: Lixis damage can push heroes to lethal, and if we don't flip them to
+                    // corpse here they linger at 0 HP / not-corpse across the round boundary (clients still
+                    // see them as live heroes, and a vanguard hero killed this way could even attack in the
+                    // new wave before a later incidental sweep). Every other damage path sweeps immediately.
+                    ProcessImmediateDeaths(opPs, opp, own, b);
                 }
                 else if (lr == 18) // Magdelina: each hero + leader in your unit gains Strength 1 (persistent)
                 {
