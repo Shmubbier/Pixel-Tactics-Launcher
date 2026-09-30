@@ -1270,12 +1270,12 @@ namespace PtoServer
             // (op5/op6 istrap=true). It stays armed until the rival's next matching action (round >= 2),
             // which it negates (rival still spends the action). *Lane = the reserve grid_y (0..2) holding
             // the face-down card, so we can clear it (op32) when it triggers. -1 = not armed.
-            public bool TrapCancelAttack;       // Reflector: cancels the rival's next attack, then Backlashes the attacker
-            public bool TrapCancelSpell;        // Statistician: cancels the rival's next wave-spell; owner draws 1
-            public bool TrapCancelOrder;        // Mastermind: cancels the rival's next order
-            public int TrapAttackLane = -1;
-            public int TrapSpellLane = -1;
-            public int TrapOrderLane = -1;
+            // Each trap type can be armed in MULTIPLE reserve lanes at once (e.g. two Reflectors). Each entry
+            // is one armed face-down trap's reserve lane; triggering pops one (FIFO) and clears its visual.
+            // (Was a single bool + single lane, so a 2nd same-type trap overwrote the 1st and never fired.)
+            public List<int> TrapAttackLanes = new List<int>();   // Reflector: cancel next attack, then Backlash the attacker
+            public List<int> TrapSpellLanes  = new List<int>();   // Statistician: cancel next wave-spell; owner draws 1
+            public List<int> TrapOrderLanes  = new List<int>();   // Mastermind: cancel next order
             // Ongoing effects.
             public int ImmortalWaves;    // >0: your VANGUARD (grid_x==2) heroes can't die by any means; decrements each wave (Curse Knight order)
             public int ImmortalLane = -1; // reserve lane holding the face-up Immortality operation card (-1 = none)
@@ -2038,7 +2038,7 @@ namespace PtoServer
         {
             for (int lane = 0; lane < 3; lane++)
             {
-                bool taken = ps.TrapAttackLane == lane || ps.TrapSpellLane == lane || ps.TrapOrderLane == lane || ps.ImmortalLane == lane;
+                bool taken = ps.TrapAttackLanes.Contains(lane) || ps.TrapSpellLanes.Contains(lane) || ps.TrapOrderLanes.Contains(lane) || ps.ImmortalLane == lane;
                 if (!taken) foreach (var o in ps.Ongoing) if (o.Lane == lane) { taken = true; break; }
                 if (!taken) return lane;
             }
@@ -2290,8 +2290,8 @@ namespace PtoServer
         // If PlayerState/BUnit gain a new field one of those functions reads, add it here too, or a
         // clone will silently score a stale position:
         //   PlayerState: Units (dict of BUnit), Orbs, LeaderLife, LeaderMax, LeaderAbilities,
-        //                LeaderArmorBonus, LeaderCard, Deck (COUNT only), TrapAttackLane, TrapSpellLane,
-        //                TrapOrderLane, ImmortalLane, Ongoing (each entry's Lane only).
+        //                LeaderArmorBonus, LeaderCard, Deck (COUNT only), TrapAttackLanes, TrapSpellLanes,
+        //                TrapOrderLanes, ImmortalLane, Ongoing (each entry's Lane only).
         //   Hand: lives on BattleSlot, not PlayerState (bot.Hand) - cloned alongside its owning player.
         //   BUnit: Atk, Max, Damage, Strength, TempStrength, Armor, Abilities, IsCorpse, BotAggro,
         //          HasAttackedThisWave, RecruitedThisWave.
@@ -2328,9 +2328,9 @@ namespace PtoServer
             p.LeaderAbilities = src.LeaderAbilities;
             p.LeaderArmorBonus = src.LeaderArmorBonus;
             p.LeaderCard = src.LeaderCard;
-            p.TrapAttackLane = src.TrapAttackLane;
-            p.TrapSpellLane = src.TrapSpellLane;
-            p.TrapOrderLane = src.TrapOrderLane;
+            p.TrapAttackLanes = new List<int>(src.TrapAttackLanes);
+            p.TrapSpellLanes  = new List<int>(src.TrapSpellLanes);
+            p.TrapOrderLanes  = new List<int>(src.TrapOrderLanes);
             p.ImmortalLane = src.ImmortalLane;
             p.Ongoing = new List<OngoingOp>(src.Ongoing);
             int deckCount = src.Deck != null ? src.Deck.Count : 0;
@@ -3598,10 +3598,10 @@ namespace PtoServer
             // TRAP, Cancel Order: the rival's armed trap (round >= 2) negates this order. The card is
             // already discarded and the orb already paid; the caster still spends the action. A trap-
             // arming order is itself an order and can legitimately be cancelled by an opposing trap.
-            if (b.Round >= 2 && opPs.TrapCancelOrder)
+            if (b.Round >= 2 && opPs.TrapOrderLanes.Count > 0)
             {
-                opPs.TrapCancelOrder = false;
-                ClearTrapVisual(theirs, mine, opPs.TrapOrderLane); opPs.TrapOrderLane = -1;
+                int trapLane = opPs.TrapOrderLanes[0]; opPs.TrapOrderLanes.RemoveAt(0);
+                ClearTrapVisual(theirs, mine, trapLane);
                 Log("  -> TRAP: " + (theirs != null ? theirs.Me.User : "defender") + "'s Cancel Order negates " + mine.Me.User + "'s order");
                 ConsumeAction(mine, theirs, b);
                 BattleSlot t0 = mine.P == 0 ? mine : theirs, t1 = mine.P == 0 ? theirs : mine;
@@ -4069,14 +4069,14 @@ namespace PtoServer
                         }
                     }
                     break;
-                case OrderKind.TrapCancelAttack: // arm: negate the rival's next attack (+ Backlash the attacker)
-                    ps.TrapCancelAttack = true; Log("  TRAP ARMED: Cancel Attack (" + mine.Me.User + ")");
+                case OrderKind.TrapCancelAttack: // arm via ResolveEffect (no reserve lane here; -1 = unknown lane)
+                    ps.TrapAttackLanes.Add(-1); Log("  TRAP ARMED: Cancel Attack (" + mine.Me.User + ")");
                     break;
-                case OrderKind.TrapCancelSpell:  // arm: negate the rival's next wave-spell (owner draws 1)
-                    ps.TrapCancelSpell = true; Log("  TRAP ARMED: Cancel Spell (" + mine.Me.User + ")");
+                case OrderKind.TrapCancelSpell:
+                    ps.TrapSpellLanes.Add(-1); Log("  TRAP ARMED: Cancel Spell (" + mine.Me.User + ")");
                     break;
-                case OrderKind.TrapCancelOrder:  // arm: negate the rival's next order
-                    ps.TrapCancelOrder = true; Log("  TRAP ARMED: Cancel Order (" + mine.Me.User + ")");
+                case OrderKind.TrapCancelOrder:
+                    ps.TrapOrderLanes.Add(-1); Log("  TRAP ARMED: Cancel Order (" + mine.Me.User + ")");
                     break;
                 case OrderKind.DamageAll:   // Poison (official): X damage to ALL rival heroes
                     foreach (var kv in opPs.Units) DamageEnemyAt(opPs, kv.Key / 10, kv.Key % 10, eff.Amount);
@@ -4782,7 +4782,7 @@ namespace PtoServer
 
             // One reserve card per lane.
             bool ongoingLaneTaken = false; foreach (var o in ps.Ongoing) if (o.Lane == lane) { ongoingLaneTaken = true; break; }
-            if (ps.TrapAttackLane == lane || ps.TrapSpellLane == lane || ps.TrapOrderLane == lane || ps.ImmortalLane == lane || ongoingLaneTaken)
+            if (ps.TrapAttackLanes.Contains(lane) || ps.TrapSpellLanes.Contains(lane) || ps.TrapOrderLanes.Contains(lane) || ps.ImmortalLane == lane || ongoingLaneTaken)
             { Log("RESERVE rejected: lane " + lane + " already occupied"); GrantAction(mine); return; }
 
             // Orb cost (same as the client gate).
@@ -4798,9 +4798,9 @@ namespace PtoServer
             {
                 switch (eff.Kind)
                 {
-                    case OrderKind.TrapCancelAttack: ps.TrapCancelAttack = true; ps.TrapAttackLane = lane; break;
-                    case OrderKind.TrapCancelSpell:  ps.TrapCancelSpell  = true; ps.TrapSpellLane  = lane; break;
-                    case OrderKind.TrapCancelOrder:  ps.TrapCancelOrder  = true; ps.TrapOrderLane  = lane; break;
+                    case OrderKind.TrapCancelAttack: ps.TrapAttackLanes.Add(lane); break;
+                    case OrderKind.TrapCancelSpell:  ps.TrapSpellLanes.Add(lane);  break;
+                    case OrderKind.TrapCancelOrder:  ps.TrapOrderLanes.Add(lane);  break;
                 }
                 faceDown = true;
             }
@@ -4964,10 +4964,10 @@ namespace PtoServer
                 // caster still spends its action and the trap owner (Statistician) draws 1.
                 {
                     PlayerState defTrap = b.P[1 - mine.P];
-                    if (b.Round >= 2 && defTrap.TrapCancelSpell)
+                    if (b.Round >= 2 && defTrap.TrapSpellLanes.Count > 0)
                     {
-                        defTrap.TrapCancelSpell = false;
-                        ClearTrapVisual(theirs, mine, defTrap.TrapSpellLane); defTrap.TrapSpellLane = -1;
+                        int trapLane = defTrap.TrapSpellLanes[0]; defTrap.TrapSpellLanes.RemoveAt(0);
+                        ClearTrapVisual(theirs, mine, trapLane);
                         Log("  -> TRAP: " + (theirs != null ? theirs.Me.User : "defender") + "'s Cancel Spell negates " + mine.Me.User + "'s spell; owner draws 1");
                         if (theirs != null) DrawCardsFor(theirs, mine, b, 1);
                         if (casterIsHero && !seff.Free && casterUnit != null && !casterUnit.IsCorpse)
@@ -5062,9 +5062,9 @@ namespace PtoServer
             // attacking leader -> loss).
             {
                 PlayerState defTrap = b.P[1 - mine.P];
-                if (b.Round >= 2 && defTrap.TrapCancelAttack)
+                if (b.Round >= 2 && defTrap.TrapAttackLanes.Count > 0)
                 {
-                    defTrap.TrapCancelAttack = false;
+                    int trapLane = defTrap.TrapAttackLanes[0]; defTrap.TrapAttackLanes.RemoveAt(0);
                     int backlash = Math.Max(1, attacker.Atk);
                     Log("  -> TRAP: " + (theirs != null ? theirs.Me.User : "defender") + "'s Cancel Attack negates " + mine.Me.User + "'s attack; Backlash " + backlash);
                     // Play the attack so the block is VISIBLE: the attacker lunges at its target, which
@@ -5078,7 +5078,7 @@ namespace PtoServer
                     else
                         SendAttackAndUpdate(mine, theirs, ax, ay, tx, serverTy, 0, attackerIsLeader, animTgt, animRanged, false, b);
                     // Then remove the face-down trap card and Backlash the attacker.
-                    ClearTrapVisual(theirs, mine, defTrap.TrapAttackLane); defTrap.TrapAttackLane = -1;
+                    ClearTrapVisual(theirs, mine, trapLane);
                     bool selfLeaderDied = false;
                     if (attackerIsLeader)
                     {
