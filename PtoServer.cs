@@ -3374,6 +3374,8 @@ namespace PtoServer
                 case OrderKind.GrantRanged:          return 20;  // obj_give_ranged (Lizaveta)
                 case OrderKind.DamageSingle:
                 case OrderKind.DamageRow:            // Fire
+                case OrderKind.DamageRowRandom:      // Bombard Row (explosion, not elemental)
+                case OrderKind.DamageColumnRandom:   // Bombard Column (explosion, not Thunder)
                 case OrderKind.DamageBlast:
                 case OrderKind.DamageRandom:
                 case OrderKind.DamageFrontEach:
@@ -3424,11 +3426,17 @@ namespace PtoServer
             switch (eff.Kind)
             {
                 case OrderKind.DamageSingle: case OrderKind.Backlash:
+                    // Single-target damage: show the target reticle before the hit, like the AoEs do.
+                    cells.Add(Key(gx, enemyGy)); telegraph = true; break;
                 case OrderKind.KillHero: case OrderKind.FinisherKill: case OrderKind.Takedown:
                 case OrderKind.Silence:
                     cells.Add(Key(gx, enemyGy)); break;
                 case OrderKind.DamageRandom: // gx/enemyGy set to the real hit cell in ResolveEffect (-1 = no target)
-                    if (gx >= 0 && enemyGy >= 0) cells.Add(Key(gx, enemyGy)); break;
+                    if (gx >= 0 && enemyGy >= 0) { cells.Add(Key(gx, enemyGy)); telegraph = true; } break;
+                case OrderKind.DamageRowRandom:    // Bombard Row: enemyGy holds the row ResolveEffect rolled
+                    for (int cx = 0; cx <= 2; cx++) cells.Add(Key(cx, enemyGy)); telegraph = true; break;
+                case OrderKind.DamageColumnRandom: // Bombard Column: gx holds the column ResolveEffect rolled
+                    for (int cy = 0; cy <= 2; cy++) cells.Add(Key(gx, cy)); telegraph = true; break;
                 case OrderKind.DamageLeader:
                     cells.Add(Key(1, 1)); break;
                 case OrderKind.DamageRow:
