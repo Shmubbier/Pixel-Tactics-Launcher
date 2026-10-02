@@ -182,7 +182,7 @@ namespace PtoServer
                                  // (official Quick = "does not consume an action"); still exhausts (once/wave)
     }
 
-    class Program
+    partial class Program
     {
         static int Port = 15338;   // default listen port (below the 49152+ ephemeral range; matches the
                                    // client's patched dial port). The launcher overrides it with --port 15339.
@@ -215,6 +215,7 @@ namespace PtoServer
 
         static void Main(string[] args)
         {
+            if (args.Length > 0 && args[0] == "botai-test") { Environment.Exit(BotAiTests.Run()); }
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--quiet") Verbose = false;
