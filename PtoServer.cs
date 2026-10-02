@@ -1708,25 +1708,11 @@ namespace PtoServer
         const int BotHandTarget = 3;
 
         // One candidate move the bot could make this action, with the priority score it scored. Rank/Pool/Top
-        // are filled by BotChoose for the training log (chosen rank within the sorted pool, and the best score).
+        // are filled by the picker for the training log (chosen rank within the sorted pool, and the best score).
         class BotMove { public int Kind; public byte[] Payload; public double Score; public string Desc; public int Rank; public int Pool; public double Top; } // Kind: 1=summon,2=attack,3=draw,4=clear,5=order,6=reserve,7=spell
 
-        // Difficulty -> the [lo,hi) rank window (into the best-first sorted candidate list) the bot draws its
-        // pick from. Harder = nearer the top = more likely a very good move. Absolute bands per design;
-        // clamped to the actual candidate count in BotChoose.
-        static void BotBand(int diff, out int lo, out int hi)
-        {
-            switch (diff)
-            {
-                case 2:  lo = 0;  hi = 10;  break; // Challenge / hard bot: 1 of the top 10
-                case 1:  lo = 10; hi = 30;  break; // Hard stage / medium bot: ranks 10-30
-                default: lo = 30; hi = 100; break; // Easy stage / easy bot: ranks 30-100
-            }
-        }
-
         // Decide and perform ONE bot action. Enumerate every LEGAL move (same rules/limit a human has),
-        // score each with the formulas below, sort best-first, then pick one from the difficulty's rank
-        // window. Returns false when the bot has no legal move (ends its turn).
+        // score each with the formulas below, then pick per difficulty (search for Hard/Challenge, greedy-or-blunder for Easy). Returns false when the bot has no legal move (ends its turn).
         static BotMove BotDoOneAction(BattleSlot bot)
         {
             Battle b = bot.Battle;
@@ -1740,7 +1726,7 @@ namespace PtoServer
                 int beam = 0, plies = 0;
                 if (b.BotDifficulty == 2) { beam = 8; plies = 3; move = BotSearchBest(b, bot, beam, plies); }      // Challenge: deepest/widest
                 else if (b.BotDifficulty == 1) { beam = 4; plies = 2; move = BotSearchBest(b, bot, beam, plies); } // Hard: shallower/narrower
-                else move = BotChoose(BotEnumerateMoves(b, bot, ps, hp), b.BotDifficulty);                        // Easy: unchanged (rank-band + lethal)
+                else move = BotChooseGreedyOrBlunder(BotEnumerateMoves(b, bot, ps, hp), blunder: true);           // Easy: greedy with a blunder rate
                 if (move != null) BotLogDecision(b, ps, hp, move, beam, plies);
                 if (move != null && BotSimCheckEnabled) preMoveClone = BotCloneState(b);
             }
@@ -1772,30 +1758,6 @@ namespace PtoServer
             if (a == null || b == null || a.Length != b.Length) return false;
             for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
             return true;
-        }
-
-        // Sort candidates best-first and pick one from the difficulty's rank window (clamped: with only n
-        // candidates, a window past the end collapses onto the worst available move, so weak bots stay weak).
-        static BotMove BotChoose(List<BotMove> moves, int diff)
-        {
-            if (moves.Count == 0) return null;
-            moves.Sort((x, y) => y.Score.CompareTo(x.Score));
-            // A guaranteed win this action is always taken, at every difficulty - even an "easy" bot takes a
-            // free win rather than fumbling it for flavor. 800 is the leader-kill bonus (BotAddAttack L1883,
-            // BotPlanEffect DamageLeader L2068); reuse it so threshold and bonus can never drift apart.
-            if (moves[0].Score >= 800)
-            {
-                moves[0].Rank = 0; moves[0].Pool = moves.Count; moves[0].Top = moves[0].Score;
-                return moves[0];
-            }
-            int lo, hi; BotBand(diff, out lo, out hi);
-            int n = moves.Count;
-            if (lo > n - 1) lo = n - 1;
-            if (hi > n) hi = n;
-            if (hi <= lo) hi = lo + 1;
-            int idx; lock (_rng) idx = _rng.Next(lo, hi);
-            moves[idx].Rank = idx; moves[idx].Pool = n; moves[idx].Top = moves[0].Score; // for the training log
-            return moves[idx];
         }
 
         // Buffer one bot decision as a JSON fragment (state features + the chosen move's rank/score). The
@@ -2301,7 +2263,7 @@ namespace PtoServer
         // Every one of them needs "what would the board look like after move X" without touching the
         // live Battle or sending anything over the network. BotCloneState + BotSimulateApply are that,
         // and nothing else: the live decision in BotDoOneAction still calls
-        // BotChoose(BotEnumerateMoves(...)) exactly as before, unchanged.
+        // BotChooseGreedyOrBlunder(BotEnumerateMoves(...)).
         //
         // Minimal state slice the heuristic reads (verified by grep against BotEnumerateMoves,
         // BotAddAttack, BotPlanEffect, BotLogDecision and every Bot* helper they call, 2026-09-28).
@@ -2645,7 +2607,7 @@ namespace PtoServer
         // (bot, opponent, bot, ...), beam-limited to `beamWidth` candidates per ply. Must be called
         // under _battleLock (BotDoOneAction already holds it). Every candidate still comes from
         // BotEnumerateMoves, so the returned move is always legal and dispatches through the real
-        // Handle* switch same as BotChoose's pick.
+        // Handle* switch same as BotChooseGreedyOrBlunder's pick.
         static BotMove BotSearchBest(Battle b, BattleSlot bot, int beamWidth, int plies)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -2654,7 +2616,7 @@ namespace PtoServer
             if (moves.Count == 0) return null;
             moves.Sort((x, y) => y.Score.CompareTo(x.Score));
             BotMove picked;
-            if (moves[0].Score >= 800) // guaranteed win: take it now, no lookahead needed (see BotChoose)
+            if (moves[0].Score >= 800) // guaranteed win: take it now, no lookahead needed (see BotChooseGreedyOrBlunder)
             {
                 moves[0].Rank = 0; moves[0].Pool = moves.Count; moves[0].Top = moves[0].Score;
                 picked = moves[0];

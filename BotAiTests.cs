@@ -177,6 +177,32 @@ partial class Program
             // RANGED into a Counter unit is NOT penalized (counter is melee-only).
             Check(BotCounterPenalty(MakeUnitState(3, ranged: true), MakeUnitState(7, counter: true), dmg: 3, kills: false, targetIsLeader: false) == 0, "counter: ranged not penalized");
 
+            // THE regression: on a board where attacking is clearly best, Easy must pick an attack, not filler.
+            var ez = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(ez.P[0], 2, 1, 50, atk: 4, max: 5);
+            AddUnit(ez.P[1], 2, 1, 20, atk: 2, max: 4);
+            ez.P[0].Units[Key(0,0)] = new BUnit { Card = 99, IsCorpse = true };  // a clear-corpse filler option exists
+            var easyAttacks = 0;
+            for (int i = 0; i < 200; i++)
+            {
+                var ems = BotEnumerateMoves(ez, MakeSlot(ez, 0, new List<ushort>{ 10 }), ez.P[0], ez.P[1]);
+                var epick = BotChooseGreedyOrBlunder(ems, blunder: true);
+                if (epick != null && epick.Kind == 2) easyAttacks++;
+            }
+            Check(easyAttacks > 120, "easy: attacks the clear majority of the time (was 0 before), got " + easyAttacks);
+
+            // Greedy (no blunder) always takes the top-scored move.
+            var gms = BotEnumerateMoves(ez, MakeSlot(ez, 0, new List<ushort>{ 10 }), ez.P[0], ez.P[1]);
+            gms.Sort((x,y)=>y.Score.CompareTo(x.Score));
+            var greedy = BotChooseGreedyOrBlunder(new List<BotMove>(gms), blunder: false);
+            Check(greedy.Score == gms[0].Score, "greedy: takes the best move");
+
+            // Guaranteed win is taken even with blunder on.
+            var ewin = MakeBattle(1, 4, 2, 20, 2);
+            AddUnit(ewin.P[0], 2, 1, 50, atk: 9, max: 5);
+            var ewm = BotEnumerateMoves(ewin, MakeSlot(ewin, 0, null), ewin.P[0], ewin.P[1]);
+            Check(BotChooseGreedyOrBlunder(ewm, blunder: true).Score >= 800, "easy: still takes a guaranteed win");
+
             Console.WriteLine("botai-test: " + _fail + " failure(s)");
             return _fail;
         }

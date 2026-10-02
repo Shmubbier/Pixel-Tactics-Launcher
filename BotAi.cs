@@ -91,4 +91,28 @@ partial class Program
         if (tgt.HasReflect) penalty += dmg * 4;
         return penalty;
     }
+
+    const double EasyBlunderChance = 0.35;
+
+    // Easy picker: usually the best move, but sometimes a deliberately imperfect one (a weak human still
+    // attacks, just mis-targets). Never passes up a guaranteed win; never degenerates into pure filler when
+    // a real move exists. "blunder" is false for the greedy path.
+    static BotMove BotChooseGreedyOrBlunder(List<BotMove> moves, bool blunder)
+    {
+        if (moves.Count == 0) return null;
+        moves.Sort((x, y) => y.Score.CompareTo(x.Score));
+        if (moves[0].Score >= 800) { moves[0].Rank = 0; moves[0].Pool = moves.Count; moves[0].Top = moves[0].Score; return moves[0]; }
+        int idx = 0;
+        bool roll; lock (_rng) roll = blunder && _rng.NextDouble() < EasyBlunderChance;
+        if (roll)
+        {
+            // Pick among the reasonable alternatives: everything within 200 score of the best (keeps it from
+            // choosing pure filler like draw/clear-corpse when a decent move exists), excluding the very best.
+            double cut = moves[0].Score - 200;
+            int hi = 1; while (hi < moves.Count && moves[hi].Score >= cut) hi++;
+            if (hi > 1) lock (_rng) idx = _rng.Next(1, hi);
+        }
+        moves[idx].Rank = idx; moves[idx].Pool = moves.Count; moves[idx].Top = moves[0].Score;
+        return moves[idx];
+    }
 }
