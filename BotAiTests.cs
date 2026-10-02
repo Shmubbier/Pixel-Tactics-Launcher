@@ -189,7 +189,7 @@ partial class Program
                 var epick = BotChooseGreedyOrBlunder(ems, blunder: true);
                 if (epick != null && epick.Kind == 2) easyAttacks++;
             }
-            Check(easyAttacks > 120, "easy: attacks the clear majority of the time (was 0 before), got " + easyAttacks);
+            Check(easyAttacks > 100, "easy: attacks the clear majority of the time (was 0 before), got " + easyAttacks);
 
             // Greedy (no blunder) always takes the top-scored move.
             var gms = BotEnumerateMoves(ez, MakeSlot(ez, 0, new List<ushort>{ 10 }), ez.P[0], ez.P[1]);

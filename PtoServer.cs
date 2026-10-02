@@ -1712,7 +1712,9 @@ namespace PtoServer
         class BotMove { public int Kind; public byte[] Payload; public double Score; public string Desc; public int Rank; public int Pool; public double Top; } // Kind: 1=summon,2=attack,3=draw,4=clear,5=order,6=reserve,7=spell
 
         // Decide and perform ONE bot action. Enumerate every LEGAL move (same rules/limit a human has),
-        // score each with the formulas below, then pick per difficulty (search for Hard/Challenge, greedy-or-blunder for Easy). Returns false when the bot has no legal move (ends its turn).
+        // score each with the formulas below, then pick per difficulty (search for Hard/Challenge,
+        // greedy-or-blunder for Easy). Returns the move performed, or null when the bot has no legal
+        // move (ends its turn).
         static BotMove BotDoOneAction(BattleSlot bot)
         {
             Battle b = bot.Battle;
