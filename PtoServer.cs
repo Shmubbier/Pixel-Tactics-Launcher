@@ -2011,24 +2011,28 @@ namespace PtoServer
         static void BotAddAttack(List<BotMove> moves, PlayerState hp, PlayerState ps, bool centerOpen, double leaderUrgency,
                                  int aw, int al, int tw, int tl, int atk, bool heroKiller, bool targetIsLeader)
         {
+            UnitState aState = UnitState.Of(ps.Units[Key(aw, al)], aw, al, ps, hp);
             int raw = heroKiller ? atk * 2 : atk;
-            int armor, rem, tgtAtk = 0, aggro = 0; bool threatensMyLeader = false;
+            int armor, rem; double score; bool threatensMyLeader = false; UnitState tState = default;
             if (targetIsLeader) { armor = hp.LeaderArmorBonus; rem = Math.Max(1, hp.LeaderLife); }
             else
             {
-                BUnit t; hp.Units.TryGetValue(Key(tw, tl), out t);
-                if (t == null) return;
-                armor = t.Armor; rem = Math.Max(1, t.Max - t.Damage); tgtAtk = t.Atk + t.Strength; aggro = t.BotAggro;
+                BUnit t; if (!hp.Units.TryGetValue(Key(tw, tl), out t) || t == null) return;
+                armor = t.Armor; rem = Math.Max(1, t.Max - t.Damage);
+                tState = UnitState.Of(t, tw, tl, hp, ps);
                 threatensMyLeader = BotEnemyThreatensLeader(t, tl, ps, centerOpen);
             }
             int dmg = Math.Max(0, raw - armor);
             bool kills = dmg >= rem;
-            double score = 90 + dmg * 4 + aggro;                                 // aggro: finish who I hit / who hit me
-            if (targetIsLeader) { score += dmg * 8; if (kills) score += 800; }   // leader damage wins the game
-            else score += kills ? 60 + tgtAtk * 5 : tgtAtk * 2;                  // value removing a threat
-            // Defensive: removing an enemy that can hit MY leader is worth more the lower my leader's life
-            // (full value on a kill that ends the threat, partial for chip). Balances offense vs. protection.
-            if (threatensMyLeader) score += BotDefenseWeight * tgtAtk * leaderUrgency * (kills ? 1.0 : 0.4);
+
+            if (targetIsLeader && kills) { score = 800 + dmg * 8; }              // guaranteed-win path (unchanged)
+            else
+            {
+                double tiebreak;
+                int tier = BotClassifyTarget(in aState, in tState, targetIsLeader, kills, threatensMyLeader, out tiebreak);
+                if (threatensMyLeader) tiebreak = Math.Min(99, tiebreak + BotDefenseWeight * tState.Attack * leaderUrgency * (kills ? 1.0 : 0.4));
+                score = BotTargetScore(tier, tiebreak) - BotCounterPenalty(in aState, in tState, dmg, kills, targetIsLeader);
+            }
             moves.Add(new BotMove { Kind = 2, Score = score,
                 Payload = new byte[] { 0, 0, (byte)aw, (byte)al, (byte)tw, (byte)tl },
                 Desc = "(" + aw + "," + al + ")->(" + tw + "," + tl + ") dmg" + dmg + (kills ? " KILL" : "") });

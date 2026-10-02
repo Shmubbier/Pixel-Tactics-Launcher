@@ -47,6 +47,15 @@ partial class Program
                                        int remaining = 5, int armor = 0)
             => UnitState.ForTest(ranged, counter, atk, remaining, armor, frontmost);
 
+        // Enumerate the bot's moves on a battle, return the single best-scored one.
+        static BotMove BestMove(Battle b)
+        {
+            var ms = BotEnumerateMoves(b, MakeSlot(b, 0, null), b.P[0], b.P[1]);
+            ms.Sort((x, y) => y.Score.CompareTo(x.Score));
+            return ms.Count > 0 ? ms[0] : null;
+        }
+        static bool IsAttackTo(BotMove m, int tw, int tl) => m != null && m.Kind == 2 && m.Payload[4] == tw && m.Payload[5] == tl;
+
         public static int Run()
         {
             _fail = 0;
@@ -88,6 +97,41 @@ partial class Program
             // Ranged hitting a non-front backline unit -> RANGED-REACH (tier 4).
             var back = MakeUnitState(atk: 2, frontmost: false);
             Check(BotClassifyTarget(atkRanged, back, false, false, false, out tb) == 4, "classify: ranged reach -> tier4");
+
+            // Counter blocker in the center Vanguard: bot melee hero in the center lane. Enemy center front is a
+            // Counter Knight; a side lane has a squishy grunt. The bot should clear the blocker, not chip the grunt.
+            var tb1 = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(tb1.P[0], 2, 1, 50, atk: 5, max: 5);
+            AddUnit(tb1.P[1], 2, 1, 35, atk: 3, max: 9, abil: UnitAbility.Counter);
+            AddUnit(tb1.P[1], 2, 0, 20, atk: 1, max: 3);
+            Check(IsAttackTo(BestMove(tb1), 2, 1), "attack: clears counter blocker over side chip");
+
+            // Ranged bot unit prefers a high-value backline target over the frontmost tank in a column.
+            // (Wave 1 so the Flank ranged unit is ready; the brief's wave 2 left it idle.)
+            var tb2 = MakeBattle(1, 4, 1, 20, 20);
+            tb2.P[1].LeaderAbilities = UnitAbility.RImmunity; // no leader snipe candidate; isolate the column choice
+            AddUnit(tb2.P[0], 1, 0, 62, atk: 4, max: 5, abil: UnitAbility.RangedAttack);
+            AddUnit(tb2.P[1], 2, 2, 70, atk: 1, max: 9);
+            AddUnit(tb2.P[1], 2, 0, 71, atk: 6, max: 3, aggro: 3);
+            var best2 = BestMove(tb2);
+            Check(best2 != null && best2.Kind == 2 && best2.Payload[5] == 0, "attack: ranged picks the high-value column");
+
+            // Leader lethal is taken (and reaches the 800 shortcut).
+            var tb3 = MakeBattle(1, 4, 2, 20, 3);
+            AddUnit(tb3.P[0], 2, 1, 50, atk: 9, max: 5);
+            var best3 = BestMove(tb3);
+            Check(best3 != null && best3.Score >= 800 && IsAttackTo(best3, 1, 1), "attack: lethal leader hit >= 800");
+
+            // Melee-frontmost attacker gate survives the scoring rewrite: a Flank melee BEHIND its own Vanguard
+            // ally produces NO attack candidate, while the Vanguard ally in front does.
+            var tb4 = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(tb4.P[0], 2, 1, 50, atk: 3, max: 5);
+            AddUnit(tb4.P[0], 1, 1, 51, atk: 3, max: 5);
+            AddUnit(tb4.P[1], 2, 1, 20, atk: 2, max: 9);
+            var ms4 = BotEnumerateMoves(tb4, MakeSlot(tb4, 0, null), tb4.P[0], tb4.P[1]);
+            bool flankOffered = ms4.Exists(m => m.Kind == 2 && m.Payload[2] == 1 && m.Payload[3] == 1);
+            bool vanOffered   = ms4.Exists(m => m.Kind == 2 && m.Payload[2] == 2 && m.Payload[3] == 1);
+            Check(!flankOffered && vanOffered, "attack: blocked flank melee gets no attack; front vanguard does");
 
             Console.WriteLine("botai-test: " + _fail + " failure(s)");
             return _fail;

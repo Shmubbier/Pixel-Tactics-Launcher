@@ -74,4 +74,7 @@ partial class Program
         if (atk.IsRanged && !tgt.IsFrontmostInLane) return 4;             // RANGED-REACH the backline
         return 5;                                                          // CHIP
     }
+
+    // Cost of attacking into a Counter/Reflect target. Stub: Task 5 fills this in.
+    static double BotCounterPenalty(in UnitState atk, in UnitState tgt, int dmg, bool kills, bool targetIsLeader) => 0;
 }
