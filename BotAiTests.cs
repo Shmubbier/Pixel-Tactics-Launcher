@@ -203,6 +203,15 @@ partial class Program
             var ewm = BotEnumerateMoves(ewin, MakeSlot(ewin, 0, null), ewin.P[0], ewin.P[1]);
             Check(BotChooseGreedyOrBlunder(ewm, blunder: true).Score >= 800, "easy: still takes a guaranteed win");
 
+            // After simulating a non-lethal melee hit into a Counter unit, the attacker has taken retaliation.
+            var sc = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(sc.P[0], 2, 1, 50, atk: 3, max: 6);                                  // bot attacker (survives)
+            AddUnit(sc.P[1], 2, 1, 35, atk: 4, max: 9, abil: UnitAbility.Counter);      // Counter wall (3 dmg won't kill)
+            var clone = BotCloneState(sc);
+            BotSimulateApply(clone, new BotMove { Kind = 2, Payload = new byte[] { 0, 0, 2, 1, 2, 1 } });
+            BUnit attackerAfter; clone.Mine.Units.TryGetValue(Key(2, 1), out attackerAfter);
+            Check(attackerAfter != null && attackerAfter.Damage >= 4, "sim: non-lethal melee into Counter takes retaliation");
+
             Console.WriteLine("botai-test: " + _fail + " failure(s)");
             return _fail;
         }

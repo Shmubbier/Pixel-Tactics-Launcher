@@ -2437,7 +2437,7 @@ namespace PtoServer
         // Kind=2 candidates. (1,1) is always the leader cell (units can never be summoned there), so no
         // ambiguity between a leader hit and a unit hit. Mirrors BotAddAttack's own damage math exactly
         // (raw = heroKiller ? atk*2 : atk; dmg = max(0, raw - armor)) rather than the full Handle*
-        // pipeline (no Shield/Vamp/Mercy/Counter/Reflect/Andrus), same "correctness for the common case"
+        // pipeline (no Shield/Vamp/Mercy/Reflect/Andrus; Counter IS modeled below), same "correctness for the common case"
         // trade-off the scoring function itself already makes.
         static void BotSimAttack(BotClonedState c, byte[] p)
         {
@@ -2458,6 +2458,15 @@ namespace PtoServer
             BUnit t;
             if (!c.Opp.Units.TryGetValue(Key(tw, tl), out t) || t == null) return;
             BotSimDamageUnit(t, Math.Max(0, raw - t.Armor));
+
+            // Counter is modeled (Reflect/Vamp/Mercy still omitted). Mirrors the real rule (HandleAttack,
+            // ~line 5348): a MELEE hit into a surviving, not-just-recruited Counter unit sends
+            // max(1, counterAtk - attackerArmor) back, so the search can see and avoid counter-blunders.
+            bool attackerRanged = (attacker.Abilities & UnitAbility.RangedAttack) != 0;
+            bool targetSurvives = (t.Damage < t.Max);
+            if (!attackerRanged && targetSurvives && !t.RecruitedThisWave
+                && (t.Abilities & UnitAbility.Counter) != 0 && t.Atk > 0)
+                attacker.Damage += Math.Max(1, t.Atk - attacker.Armor);
         }
 
         // Draw has no Payload (BotEnumerateMoves' Kind=3 candidate carries only a score/desc). Only the
