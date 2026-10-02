@@ -162,6 +162,21 @@ partial class Program
             bool vanOffered   = ms4.Exists(m => m.Kind == 2 && m.Payload[2] == 2 && m.Payload[3] == 1);
             Check(!flankOffered && vanOffered, "attack: blocked flank melee gets no attack; front vanguard does");
 
+            // Given two equal-value chip targets, one a non-lethal Counter unit and one plain, the bot picks the
+            // plain one (melee into a surviving Counter costs retaliation).
+            var cb = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(cb.P[0], 2, 0, 50, atk: 3, max: 5);
+            AddUnit(cb.P[0], 2, 2, 51, atk: 3, max: 5);
+            AddUnit(cb.P[1], 2, 0, 35, atk: 7, max: 9, abil: UnitAbility.Counter);
+            AddUnit(cb.P[1], 2, 2, 20, atk: 2, max: 9);
+            var cpick = BestMove(cb);
+            Check(cpick != null && cpick.Kind == 2 && cpick.Payload[5] == 2, "counter: avoids non-lethal melee into Counter");
+
+            // A LETHAL melee hit into a Counter unit is NOT penalized (it dies before retaliating).
+            Check(BotCounterPenalty(MakeUnitState(9, counter: false), MakeUnitState(2, counter: true), dmg: 9, kills: true, targetIsLeader: false) == 0, "counter: lethal hit not penalized");
+            // RANGED into a Counter unit is NOT penalized (counter is melee-only).
+            Check(BotCounterPenalty(MakeUnitState(3, ranged: true), MakeUnitState(7, counter: true), dmg: 3, kills: false, targetIsLeader: false) == 0, "counter: ranged not penalized");
+
             Console.WriteLine("botai-test: " + _fail + " failure(s)");
             return _fail;
         }

@@ -75,6 +75,20 @@ partial class Program
         return 5;                                                          // CHIP
     }
 
-    // Cost of attacking into a Counter/Reflect target. Stub: Task 5 fills this in.
-    static double BotCounterPenalty(in UnitState atk, in UnitState tgt, int dmg, bool kills, bool targetIsLeader) => 0;
+    // Cost of attacking into a Counter/Reflect target.
+    // Melee, non-lethal hit into a surviving Counter unit: the attacker eats max(1, tgt.Attack - atk.Armor)
+    // back (PtoServer.cs:5369). Subtract that; blow it up if the retaliation would kill the attacker.
+    // Lethal melee, or any ranged hit, is safe. Reflect: subtract the damage we would see reflected.
+    static double BotCounterPenalty(in UnitState atk, in UnitState tgt, int dmg, bool kills, bool targetIsLeader)
+    {
+        if (targetIsLeader || kills || atk.IsRanged) return 0;
+        double penalty = 0;
+        if (tgt.HasCounter)
+        {
+            int back = Math.Max(1, tgt.Attack - atk.Armor);
+            penalty += back * 6 + (back >= atk.Remaining ? 400 : 0);
+        }
+        if (tgt.HasReflect) penalty += dmg * 4;
+        return penalty;
+    }
 }
