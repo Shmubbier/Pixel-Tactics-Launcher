@@ -50,6 +50,20 @@ partial class Program
             var b = MakeBattle(1, 4, 2, 20, 20);
             Check(b.P[0].Units.Count == 0, "sanity: empty board");
             Check(b.P[0].LeaderLife == 20, "sanity: bot leader life set");
+
+            // UnitState: flags come straight off abilities; derived fields off stats/position.
+            var us = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(us.P[0], 2, 1, 35, atk: 3, max: 5, abil: UnitAbility.Counter, armor: 1, damage: 1);
+            var st = UnitState.Of(us.P[0].Units[Key(2,1)], 2, 1, us.P[0], us.P[1]);
+            Check(st.HasCounter && !st.IsRanged, "unitstate: counter flag");
+            Check(st.Attack == 3 && st.Remaining == 4 && st.Armor == 1, "unitstate: derived stats");
+            Check(st.IsFrontmostInLane, "unitstate: frontmost when alone in lane");
+
+            // A ranged unit sitting behind a frontline ally is still ranged and NOT frontmost.
+            AddUnit(us.P[0], 1, 1, 62, atk: 2, max: 5, abil: UnitAbility.RangedAttack);
+            var rg = UnitState.Of(us.P[0].Units[Key(1,1)], 1, 1, us.P[0], us.P[1]);
+            Check(rg.IsRanged && !rg.IsFrontmostInLane, "unitstate: ranged behind ally not frontmost");
+
             Console.WriteLine("botai-test: " + _fail + " failure(s)");
             return _fail;
         }
