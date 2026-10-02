@@ -19,6 +19,10 @@ partial class Program
           HasIntercept = intercept; IsIncorporeal = incorporeal; IsRImmune = rimmune; Attack = attack;
           Remaining = remaining; Armor = armor; IsFrontmostInLane = frontmost; ThreatensEnemyLeader = threatensLeader; }
 
+        // Board-free factory for pure classifier tests.
+        public static UnitState ForTest(bool ranged, bool counter, int attack, int remaining, int armor, bool frontmost)
+            => new UnitState(ranged, counter, false, false, false, false, false, attack, remaining, armor, frontmost, false);
+
         public static UnitState Of(BUnit u, int wave, int lane, PlayerState owner, PlayerState enemy)
         {
             bool ranged = (u.Abilities & UnitAbility.RangedAttack) != 0;
@@ -50,5 +54,24 @@ partial class Program
                 (u.Abilities & UnitAbility.RImmunity) != 0,
                 attack, Math.Max(1, u.Max - u.Damage), u.Armor, frontmost, threatens);
         }
+    }
+
+    // tiers 1..5 -> 500..100; tiebreak clamped to [0,99] so tiers never overlap and nothing but a real
+    // leader KILL (tier 0, handled by the +800 bonus in BotAddAttack) trips the >=800 guaranteed-win path.
+    static double BotTargetScore(int tier, double tiebreak)
+        => tier <= 0 ? 800.0 : (6 - tier) * 100.0 + Math.Min(99.0, Math.Max(0.0, tiebreak));
+
+    // Classify one attack into a priority tier (0 best). tiebreak orders candidates within a tier.
+    static int BotClassifyTarget(in UnitState atk, in UnitState tgt, bool targetIsLeader, bool kills,
+                                 bool threatensMyLeader, out double tiebreak)
+    {
+        int dmg = Math.Max(0, (atk.IsHeroKiller && !targetIsLeader ? atk.Attack * 2 : atk.Attack) - tgt.Armor);
+        tiebreak = Math.Min(99, dmg * 4 + (kills ? 20 : 0) + tgt.Attack);
+        if (targetIsLeader) return kills ? 0 : 2;                          // leader: win, else high-value offense
+        if (threatensMyLeader) return 2;                                   // DEFEND
+        if (kills) return 3;                                               // KILL
+        if (!atk.IsRanged && tgt.IsFrontmostInLane && tgt.HasCounter) return 1; // UNBLOCK a counter blocker
+        if (atk.IsRanged && !tgt.IsFrontmostInLane) return 4;             // RANGED-REACH the backline
+        return 5;                                                          // CHIP
     }
 }
