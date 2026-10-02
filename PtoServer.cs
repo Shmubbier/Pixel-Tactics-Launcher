@@ -1975,13 +1975,21 @@ namespace PtoServer
                     }
                     if (ranged)
                     {
-                        for (int col = 0; col < 3; col++)               // frontmost enemy in each column
+                        // Ranged has no frontmost requirement: offer EVERY living enemy it can actually hit. Skip
+                        // RImmunity units, and anything behind an Intercept unit (the engine redirects that shot
+                        // to the interceptor, which is itself offered as the frontmost reachable cell).
+                        for (int col = 0; col < 3; col++)
+                        {
+                            int icept = FindInterceptInColumn(col, hp, wave);
                             for (int w = 2; w >= 0; w--)
                             {
                                 BUnit t;
-                                if (hp.Units.TryGetValue(Key(w, col), out t) && t != null && !t.IsCorpse)
-                                { BotAddAttack(moves, hp, ps, centerOpen, leaderUrgency, wave, ay, w, col, atk, heroKiller, false); break; }
+                                if (!hp.Units.TryGetValue(Key(w, col), out t) || t == null || t.IsCorpse) continue;
+                                if ((t.Abilities & UnitAbility.RImmunity) != 0) continue;
+                                if (icept > w) continue;
+                                BotAddAttack(moves, hp, ps, centerOpen, leaderUrgency, wave, ay, w, col, atk, heroKiller, false);
                             }
+                        }
                         if ((hp.LeaderAbilities & UnitAbility.RImmunity) == 0)
                             BotAddAttack(moves, hp, ps, centerOpen, leaderUrgency, wave, ay, 1, 1, atk, heroKiller, true); // snipe the leader
                     }
@@ -2013,13 +2021,14 @@ namespace PtoServer
         {
             UnitState aState = UnitState.Of(ps.Units[Key(aw, al)], aw, al, ps, hp);
             int raw = heroKiller ? atk * 2 : atk;
-            int armor, rem; double score; bool threatensMyLeader = false; UnitState tState = default;
+            int armor, rem, aggro = 0; double score; bool threatensMyLeader = false; UnitState tState = default;
             if (targetIsLeader) { armor = hp.LeaderArmorBonus; rem = Math.Max(1, hp.LeaderLife); }
             else
             {
                 BUnit t; if (!hp.Units.TryGetValue(Key(tw, tl), out t) || t == null) return;
                 armor = t.Armor; rem = Math.Max(1, t.Max - t.Damage);
                 tState = UnitState.Of(t, tw, tl, hp, ps);
+                aggro = t.BotAggro;
                 threatensMyLeader = BotEnemyThreatensLeader(t, tl, ps, centerOpen);
             }
             int dmg = Math.Max(0, raw - armor);
@@ -2030,6 +2039,7 @@ namespace PtoServer
             {
                 double tiebreak;
                 int tier = BotClassifyTarget(in aState, in tState, targetIsLeader, kills, threatensMyLeader, out tiebreak);
+                tiebreak += aggro;                                                   // focus-fire: finish who I hit / who hit me
                 if (threatensMyLeader) tiebreak = Math.Min(99, tiebreak + BotDefenseWeight * tState.Attack * leaderUrgency * (kills ? 1.0 : 0.4));
                 score = BotTargetScore(tier, tiebreak) - BotCounterPenalty(in aState, in tState, dmg, kills, targetIsLeader);
             }

@@ -116,6 +116,35 @@ partial class Program
             var best2 = BestMove(tb2);
             Check(best2 != null && best2.Kind == 2 && best2.Payload[5] == 0, "attack: ranged picks the high-value column");
 
+            // Tier 4 live: a ranged unit may shoot the BACKLINE (no frontmost requirement). Enemy column 0 has a
+            // frontmost tank and a high-value squishy behind it (non-lethal, so tier 4 not tier 3). No intercept,
+            // foe leader RImmunity so the leader snipe does not dominate. Best move is the rear squishy.
+            var tb5 = MakeBattle(1, 4, 1, 20, 20);
+            tb5.P[1].LeaderAbilities = UnitAbility.RImmunity;
+            AddUnit(tb5.P[0], 1, 0, 62, atk: 4, max: 5, abil: UnitAbility.RangedAttack);
+            AddUnit(tb5.P[1], 2, 0, 70, atk: 1, max: 20);
+            AddUnit(tb5.P[1], 0, 0, 71, atk: 6, max: 9);
+            var best5 = BestMove(tb5);
+            Check(IsAttackTo(best5, 0, 0) && best5.Score >= 200 && best5.Score < 300, "attack: ranged shoots backline (tier 4 live)");
+
+            // Intercept still wins: a squishy behind an Intercept unit is not offered (the shot would redirect).
+            var tb6 = MakeBattle(1, 4, 1, 20, 20);
+            tb6.P[1].LeaderAbilities = UnitAbility.RImmunity;
+            AddUnit(tb6.P[0], 1, 0, 62, atk: 4, max: 5, abil: UnitAbility.RangedAttack);
+            AddUnit(tb6.P[1], 2, 0, 70, atk: 1, max: 20, abil: UnitAbility.Intercept);
+            AddUnit(tb6.P[1], 0, 0, 71, atk: 6, max: 9);
+            var ms6 = BotEnumerateMoves(tb6, MakeSlot(tb6, 0, null), tb6.P[0], tb6.P[1]);
+            Check(!ms6.Exists(m => m.Kind == 2 && m.Payload[4] == 0 && m.Payload[5] == 0) && ms6.Exists(m => m.Kind == 2 && m.Payload[4] == 2 && m.Payload[5] == 0),
+                  "attack: no shot offered behind an Intercept unit; interceptor is offered");
+
+            // BotAggro folds into the attack tiebreak (focus-fire): two equal chips, the aggro'd one wins.
+            var tb7 = MakeBattle(1, 4, 2, 20, 20);
+            AddUnit(tb7.P[0], 2, 1, 50, atk: 2, max: 5);
+            AddUnit(tb7.P[0], 2, 0, 51, atk: 2, max: 5);
+            AddUnit(tb7.P[1], 2, 1, 20, atk: 1, max: 9);
+            AddUnit(tb7.P[1], 2, 0, 21, atk: 1, max: 9, aggro: 8);
+            Check(BestMove(tb7) is BotMove m7 && m7.Kind == 2 && m7.Payload[5] == 0, "attack: BotAggro biases focus-fire");
+
             // Leader lethal is taken (and reaches the 800 shortcut).
             var tb3 = MakeBattle(1, 4, 2, 20, 3);
             AddUnit(tb3.P[0], 2, 1, 50, atk: 9, max: 5);
