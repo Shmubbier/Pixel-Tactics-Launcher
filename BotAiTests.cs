@@ -212,6 +212,32 @@ partial class Program
             BUnit attackerAfter; clone.Mine.Units.TryGetValue(Key(2, 1), out attackerAfter);
             Check(attackerAfter != null && attackerAfter.Damage >= 4, "sim: non-lethal melee into Counter takes retaliation");
 
+            // Full-turn smoke: drive enumerate + greedy pick repeatedly against a clone. The clone does not track
+            // ActionsRemaining (BotClonePlayerState omits it), so the loop is capped at a fixed step count instead.
+            // The bot must make at least one attack and never throw.
+            var sm = MakeBattle(1, 4, 2, 18, 12);
+            AddUnit(sm.P[0], 2, 1, 50, atk: 4, max: 5);
+            AddUnit(sm.P[0], 1, 0, 62, atk: 3, max: 5, abil: UnitAbility.RangedAttack);
+            AddUnit(sm.P[1], 2, 1, 35, atk: 3, max: 6, abil: UnitAbility.Counter);
+            AddUnit(sm.P[1], 2, 0, 20, atk: 5, max: 3, aggro: 2);
+            var smoke = BotCloneState(sm);
+            int attacksMade = 0;
+            bool smokeThrew = false;
+            try
+            {
+                for (int step = 0; step < 6; step++)
+                {
+                    var sms = BotEnumerateMoves(smoke.Battle, smoke.MineSlot, smoke.Mine, smoke.Opp);
+                    var spick = BotChooseGreedyOrBlunder(sms, blunder: false);
+                    if (spick == null) break;
+                    if (spick.Kind == 2) attacksMade++;
+                    BotSimulateApply(smoke, spick);
+                }
+            }
+            catch (Exception ex) { smokeThrew = true; Console.WriteLine("smoke exception: " + ex); }
+            Check(!smokeThrew, "smoke: full-turn loop does not throw");
+            Check(attacksMade >= 1, "smoke: bot attacks at least once in a normal turn, got " + attacksMade);
+
             Console.WriteLine("botai-test: " + _fail + " failure(s)");
             return _fail;
         }

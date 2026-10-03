@@ -33,6 +33,11 @@ Status board for the clean-room Pixel Tactics Online server (`PtoServer.cs`) and
 - **Campaign polish**: port the full Steam stage tables (3 worlds / 25 nodes / 76 stages) and
   set `StageCount` so the op60 unlock bitmap matches; progress persistence (op60). Detail:
   `SINGLEPLAYER_CAMPAIGN.md`.
+- **Bot AI overhaul (done).** Difficulty is now competence-based: Easy plays greedily with a
+  blunder rate, Hard/Challenge add lookahead search. Attack targeting classifies each target via
+  `UnitState` and a priority ladder (`BotClassifyTarget` / `BotTargetScore`), with a Counter
+  penalty in scoring and a Counter model in the sim. Fixed the Easy "never attacks" bug. Self-check:
+  `dotnet run --project PtoServer.csproj -- botai-test`.
 
 ## Known caveats
 
