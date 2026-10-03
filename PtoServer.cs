@@ -1521,8 +1521,8 @@ namespace PtoServer
         }
 
         // ---- campaign unlock rewards (see docs/superpowers/specs/2026-09-29-pillar-d-unlock-rewards.md) ----
-        // A node's AI-leader card (real*2) is locked until that node is beaten on EASY; its holographic
-        // variant (real*2+1) until CHALLENGE. Card backs 9/10/11 unlock on clearing a world's HARD tier
+        // A node's AI-leader card (real*2) unlocks on beating that node at ANY difficulty; its holographic
+        // variant (real*2+1) only on CHALLENGE. Card backs 9/10/11 unlock on clearing a world's HARD tier
         // (Crest=W1, Scholar=W2, Dark=W3), lands 2/3/4 on all 24 stars of a world (Kingspeace/Argent/Barrens).
         // Everything else - regular cards, non-campaign leaders, starter backs/lands - is always owned. All of
         // this is DERIVED from the completed-stage set (StageStore); there is no separate ownership store.
@@ -1563,7 +1563,10 @@ namespace PtoServer
             for (int node = 0; node < leaders.Length; node++)   // W3 also has node 8 (sids 73-75); its leader unlocks too
             {
                 int real = leaders[node];
-                if (done.Contains(StageCompose(world, node, 0))) cards.Add(real * 2);      // easy -> leader
+                // Leader unlocks on clearing the node at ANY difficulty; holo variant only on Challenge.
+                if (done.Contains(StageCompose(world, node, 0))
+                 || done.Contains(StageCompose(world, node, 1))
+                 || done.Contains(StageCompose(world, node, 2))) cards.Add(real * 2);      // any clear -> leader
                 if (done.Contains(StageCompose(world, node, 2))) cards.Add(real * 2 + 1);  // challenge -> holo leader
             }
         }
