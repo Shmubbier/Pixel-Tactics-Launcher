@@ -1800,7 +1800,7 @@ namespace PtoServer
             foreach (var kv in hp.Units)
             {
                 BUnit eu = kv.Value; if (eu == null || eu.IsCorpse) continue;
-                int elane = kv.Key % 10, epow = Math.Max(1, eu.Atk + eu.Strength);
+                int elane = kv.Key % 10, epow = Math.Max(1, eu.Atk);
                 if ((eu.Abilities & UnitAbility.RangedAttack) != 0) enemyRangedAtk += epow;
                 else if (elane == 1) enemyMeleeToLeader += epow;
             }
@@ -1927,7 +1927,7 @@ namespace PtoServer
                     int ay = kv.Key % 10;
                     bool ranged = (u.Abilities & UnitAbility.RangedAttack) != 0;
                     if (!ranged && !IsFrontmostAliveInColumn(wave, ay, ps)) continue; // blocked by own front ally
-                    int atk = u.Atk + u.Strength + u.TempStrength;
+                    int atk = u.Atk;
                     bool heroKiller = (u.Abilities & UnitAbility.HeroKiller) != 0;
 
                     if (decoy >= 0) // a reachable decoy forces the target
@@ -2037,7 +2037,7 @@ namespace PtoServer
                     BUnit u;
                     if (hp.Units.TryGetValue(Key(w, lane), out u) && u != null && !u.IsCorpse)
                     {
-                        int rank = u.BotAggro * 100 + (u.Atk + u.Strength);
+                        int rank = u.BotAggro * 100 + u.Atk;
                         if (rank > best) { best = rank; tx = w; ty = lane; found = true; }
                         break; // only the frontmost per lane is reachable
                     }
@@ -2061,12 +2061,12 @@ namespace PtoServer
                     BUnit u;
                     if (hp.Units.TryGetValue(Key(w, lane), out u) && u != null && !u.IsCorpse)
                     {
-                        int rank = u.BotAggro * 100 + (u.Atk + u.Strength) * 10 + (u.Max - u.Damage);
+                        int rank = u.BotAggro * 100 + u.Atk * 10 + (u.Max - u.Damage);
                         if (rank > best) { best = rank; tx = w; ty = lane; found = true; }
                         break;
                     }
                 }
-            if (found) { BUnit t = hp.Units[Key(tx, ty)]; score = 120 + (t.Atk + t.Strength) * 6 + t.BotAggro; }
+            if (found) { BUnit t = hp.Units[Key(tx, ty)]; score = 120 + t.Atk * 6 + t.BotAggro; }
             return found;
         }
 
@@ -2130,7 +2130,7 @@ namespace PtoServer
         {
             x = 0; y = 0; int best = int.MinValue; bool f = false;
             foreach (var kv in ps.Units)
-            { BUnit u = kv.Value; if (u != null && !u.IsCorpse) { int r = u.Atk + u.Strength; if (r > best) { best = r; x = kv.Key / 10; y = kv.Key % 10; f = true; } } }
+            { BUnit u = kv.Value; if (u != null && !u.IsCorpse) { int r = u.Atk; if (r > best) { best = r; x = kv.Key / 10; y = kv.Key % 10; f = true; } } }
             return f;
         }
 
@@ -2140,7 +2140,7 @@ namespace PtoServer
         {
             x = 0; y = 0; int best = int.MinValue; bool f = false;
             foreach (var kv in ps.Units)
-            { BUnit u = kv.Value; if (u != null && !u.IsCorpse && ok(u)) { int r = u.Atk + u.Strength; if (r > best) { best = r; x = kv.Key / 10; y = kv.Key % 10; f = true; } } }
+            { BUnit u = kv.Value; if (u != null && !u.IsCorpse && ok(u)) { int r = u.Atk; if (r > best) { best = r; x = kv.Key / 10; y = kv.Key % 10; f = true; } } }
             return f;
         }
 
@@ -2444,7 +2444,7 @@ namespace PtoServer
             int aw = p[2], al = p[3], tw = p[4], tl = p[5];
             BUnit attacker;
             if (!c.Mine.Units.TryGetValue(Key(aw, al), out attacker) || attacker == null) return;
-            int atk = attacker.Atk + attacker.Strength + attacker.TempStrength;
+            int atk = attacker.Atk;
             bool heroKiller = (attacker.Abilities & UnitAbility.HeroKiller) != 0;
             int raw = heroKiller ? atk * 2 : atk;
             attacker.HasAttackedThisWave = true;

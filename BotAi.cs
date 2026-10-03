@@ -20,13 +20,13 @@ partial class Program
           Remaining = remaining; Armor = armor; IsFrontmostInLane = frontmost; ThreatensEnemyLeader = threatensLeader; }
 
         // Board-free factory for pure classifier tests.
-        public static UnitState ForTest(bool ranged, bool counter, int attack, int remaining, int armor, bool frontmost)
-            => new UnitState(ranged, counter, false, false, false, false, false, attack, remaining, armor, frontmost, false);
+        public static UnitState ForTest(bool ranged, bool counter, int attack, int remaining, int armor, bool frontmost, bool reflect = false)
+            => new UnitState(ranged, counter, reflect, false, false, false, false, attack, remaining, armor, frontmost, false);
 
         public static UnitState Of(BUnit u, int wave, int lane, PlayerState owner, PlayerState enemy)
         {
             bool ranged = (u.Abilities & UnitAbility.RangedAttack) != 0;
-            int attack = u.Atk + u.Strength + u.TempStrength;
+            int attack = u.Atk;
             // Frontmost = reachable by melee: no LIVING, non-incorporeal ally in a higher wave of this lane.
             bool frontmost = true;
             for (int w = 2; w > wave; w--)

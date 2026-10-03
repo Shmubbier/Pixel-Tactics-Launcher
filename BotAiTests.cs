@@ -27,12 +27,13 @@ partial class Program
 
         // Place a unit on side ps at (wave,lane). atk/max/armor explicit; abilities OR-ed UnitAbility flags.
         static void AddUnit(PlayerState ps, int wave, int lane, ushort card, int atk, int max,
-                            UnitAbility abil = UnitAbility.None, int armor = 0, int damage = 0, int aggro = 0)
+                            UnitAbility abil = UnitAbility.None, int armor = 0, int damage = 0, int aggro = 0,
+                            int strength = 0, int tempStrength = 0)
         {
             ps.Units[Key(wave, lane)] = new BUnit
             {
                 Card = card, Atk = atk, Max = max, Armor = armor, Damage = damage,
-                Abilities = abil, BotAggro = aggro,
+                Abilities = abil, BotAggro = aggro, Strength = strength, TempStrength = tempStrength,
             };
         }
 
@@ -44,8 +45,8 @@ partial class Program
         }
 
         static UnitState MakeUnitState(int atk, bool ranged = false, bool counter = false, bool frontmost = false,
-                                       int remaining = 5, int armor = 0)
-            => UnitState.ForTest(ranged, counter, atk, remaining, armor, frontmost);
+                                       int remaining = 5, int armor = 0, bool reflect = false)
+            => UnitState.ForTest(ranged, counter, atk, remaining, armor, frontmost, reflect);
 
         // Enumerate the bot's moves on a battle, return the single best-scored one.
         static BotMove BestMove(Battle b)
@@ -151,6 +152,13 @@ partial class Program
             var best3 = BestMove(tb3);
             Check(best3 != null && best3.Score >= 800 && IsAttackTo(best3, 1, 1), "attack: lethal leader hit >= 800");
 
+            // Guard: Atk is already effective (RecomputeAuras folds Strength/TempStrength into it), so the bot
+            // must not add them again. Atk 6 is non-lethal on a 10-life leader; the old double count (6+3+3=12) was lethal.
+            var tbs = MakeBattle(1, 4, 2, 20, 10);
+            AddUnit(tbs.P[0], 2, 1, 50, atk: 6, max: 5, strength: 3, tempStrength: 3);
+            var bests = BestMove(tbs);
+            Check(bests != null && bests.Score < 800, "invariant: strength does not inflate leader-kill past 800");
+
             // Melee-frontmost attacker gate survives the scoring rewrite: a Flank melee BEHIND its own Vanguard
             // ally produces NO attack candidate, while the Vanguard ally in front does.
             var tb4 = MakeBattle(1, 4, 2, 20, 20);
@@ -176,6 +184,9 @@ partial class Program
             Check(BotCounterPenalty(MakeUnitState(9, counter: false), MakeUnitState(2, counter: true), dmg: 9, kills: true, targetIsLeader: false) == 0, "counter: lethal hit not penalized");
             // RANGED into a Counter unit is NOT penalized (counter is melee-only).
             Check(BotCounterPenalty(MakeUnitState(3, ranged: true), MakeUnitState(7, counter: true), dmg: 3, kills: false, targetIsLeader: false) == 0, "counter: ranged not penalized");
+            Check(BotCounterPenalty(MakeUnitState(3), MakeUnitState(7, reflect: true), dmg: 3, kills: false, targetIsLeader: false) > 0, "counter: non-lethal melee into Reflect penalized");
+            Check(BotCounterPenalty(MakeUnitState(3, ranged: true), MakeUnitState(7, reflect: true), dmg: 3, kills: false, targetIsLeader: false) == 0, "counter: ranged into Reflect not penalized");
+            Check(BotCounterPenalty(MakeUnitState(9), MakeUnitState(2, reflect: true), dmg: 9, kills: true, targetIsLeader: false) == 0, "counter: lethal hit into Reflect not penalized");
 
             // THE regression: on a board where attacking is clearly best, Easy must pick an attack, not filler.
             var ez = MakeBattle(1, 4, 2, 20, 20);
