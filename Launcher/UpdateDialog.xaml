@@ -1,0 +1,42 @@
+<Window x:Class="PtoLauncher.UpdateDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Update available"
+        Height="420" Width="520"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        Background="#14121C">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" x:Name="HeaderText"
+                   Text="A new version is available"
+                   FontSize="16" FontWeight="Bold" Foreground="#F0F0F0"/>
+
+        <TextBlock Grid.Row="1" x:Name="VersionText"
+                   Text="" FontSize="12" Foreground="#9A98B0" Margin="0,4,0,12"/>
+
+        <Border Grid.Row="2" Background="#0D0C14" BorderBrush="#2A2838" BorderThickness="1">
+            <TextBox x:Name="ChangelogBox"
+                     IsReadOnly="True" IsTabStop="False"
+                     Background="Transparent" Foreground="#BAD0A0" BorderThickness="0"
+                     FontFamily="Consolas" FontSize="12"
+                     TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                     Padding="10"/>
+        </Border>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+            <Button x:Name="LaterButton" Content="Not now" Click="OnLater"
+                    Width="100" Height="30" Margin="0,0,10,0"
+                    Background="#242230" Foreground="#DCDCDC" BorderThickness="0" Cursor="Hand"/>
+            <Button x:Name="UpdateButton" Content="Update now" Click="OnUpdate"
+                    Width="120" Height="30"
+                    Background="#3A6B2E" Foreground="#FFFFFF" BorderThickness="0" Cursor="Hand"/>
+        </StackPanel>
+    </Grid>
+</Window>

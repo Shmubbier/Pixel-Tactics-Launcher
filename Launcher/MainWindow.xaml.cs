@@ -71,6 +71,22 @@ public partial class MainWindow : Window
             ReadSetting("discord_app_id") ?? EmbeddedConfig.DiscordAppId,
             ReadSetting("discord_large_key") ?? EmbeddedConfig.DiscordLargeKey);
         RecomputeState(LoadOnlinePref());
+        // Auto-update: check GitHub for a newer release; if one exists, offer it with its changelog.
+        // Best-effort and off the UI thread; any failure is silent and the launcher runs normally.
+        _ = Task.Run(async () =>
+        {
+            var u = await UpdateChecker.CheckAsync();
+            if (!u.Available) return;
+            RunOnUi(() =>
+            {
+                var dlg = new UpdateDialog(u.Version, u.Changelog) { Owner = this };
+                if (dlg.ShowDialog() == true)
+                {
+                    SetStatus("Downloading update " + u.Version + "...");
+                    _ = UpdateChecker.DownloadAndApplyAsync(u, this);
+                }
+            });
+        });
     }
 
     // Read one "key=value" line from the launcher settings.ini (best-effort; null if absent).
@@ -104,7 +120,7 @@ public partial class MainWindow : Window
     void UpdateUi()
     {
         // PlayButton is image-templated (spr_ready_button_*), so its text Content is not shown.
-        // UpdateAvailable() is still a stub (always false); an "Update" state would need its own sprite.
+        // Updates are surfaced via a startup pop-up (UpdateChecker/UpdateDialog), not a button state.
         string line = _onlineMode ? "Online" : "Offline" + (string.IsNullOrEmpty(_reason) ? " (by choice)" : " - " + _reason);
         StatusText.Text = line + "     (gear to switch)";
     }
@@ -302,14 +318,6 @@ public partial class MainWindow : Window
         }
         return beside; // not found: Process.Start throws and LaunchGameWhenReadyAsync reports it
     }
-
-    // ---- update check (STUB) --------------------------------------------------------------
-    // Deferred: the GitHub-release self-update needs the release repo (public vs token-gated),
-    // a versioning/publish scheme, and the in-place-replace behavior decided first (see
-    // docs/superpowers/specs/2026-09-28-pillar-f-launcher-findings.md, section 4). Until then this
-    // is always false and the button reads PLAY. Seam: a future check compares an embedded version
-    // to the latest release tag from the GitHub Releases API here.
-    static bool UpdateAvailable() => false;
 
     // ---- ui + log helpers -----------------------------------------------------------------
     void RunOnUi(Action a)
