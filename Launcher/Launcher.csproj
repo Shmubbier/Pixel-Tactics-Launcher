@@ -6,6 +6,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>ptolaunch</AssemblyName>
+    <!-- Must match LauncherInfo.LauncherVersion (Version.cs); build.ps1 publish enforces it. -->
+    <Version>1.0.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- WPF hosts the launcher window (MainWindow.xaml), editable in Visual Studio's / Blend's

@@ -63,10 +63,29 @@ static class Program
                 return SniffDemo();
             case "rankeddemo": // ranked accumulation self-check (fake RTDB)
                 return await RankedDemoAsync();
+            case "versiontest": // semver parse/compare self-check + live update-check smoke
+                return await VersionSelfTest();
             default:
-                Console.WriteLine("usage: ptolaunch gui | play | check | ladder | demo | queuedemo | matchdemo | sniffdemo | rankeddemo");
+                Console.WriteLine("usage: ptolaunch gui | play | check | ladder | demo | queuedemo | matchdemo | sniffdemo | rankeddemo | versiontest");
                 return 1;
         }
+    }
+
+    // Self-check for the auto-update version logic: semver parse/compare (pure). Task 2 extends this
+    // with a live GitHub latest-release smoke. Run: ptolaunch versiontest
+    static async Task<int> VersionSelfTest()
+    {
+        int fail = 0;
+        void chk(bool ok, string n) { Console.WriteLine((ok ? "PASS " : "FAIL ") + n); if (!ok) fail++; }
+        chk(SemVer.TryParse("v1.2.3", out var a) && a.Major == 1 && a.Minor == 2 && a.Patch == 3, "parse v-prefixed");
+        chk(SemVer.TryParse("1.0.0", out var b) && b.CompareTo(a) < 0, "1.0.0 < 1.2.3");
+        chk(SemVer.TryParse("1.2.3", out var c) && c.CompareTo(a) == 0, "equal");
+        chk(!SemVer.TryParse("playtest-2026-10-01", out _), "non-semver rejected");
+        chk(SemVer.TryParse("v2.0.0", out var d) && d.CompareTo(a) > 0, "2.0.0 > 1.2.3");
+        chk(SemVer.TryParse(LauncherInfo.LauncherVersion, out _), "embedded LauncherVersion parses");
+        await Task.CompletedTask;
+        Console.WriteLine("versiontest: " + fail + " failure(s)");
+        return fail;
     }
 
     // Accept on (bind:listenPort); for every inbound connection open one outbound
