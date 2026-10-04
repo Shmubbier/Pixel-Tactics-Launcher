@@ -83,7 +83,10 @@ static class Program
         chk(!SemVer.TryParse("playtest-2026-10-01", out _), "non-semver rejected");
         chk(SemVer.TryParse("v2.0.0", out var d) && d.CompareTo(a) > 0, "2.0.0 > 1.2.3");
         chk(SemVer.TryParse(LauncherInfo.LauncherVersion, out _), "embedded LauncherVersion parses");
-        await Task.CompletedTask;
+        // Live smoke (needs network): must not throw. available=False is correct when our embedded
+        // version equals the latest release, or when offline.
+        var u = await UpdateChecker.CheckAsync();
+        Console.WriteLine($"live check: available={u.Available} version=\"{u.Version}\" hasZip={u.ZipUrl.Length > 0}");
         Console.WriteLine("versiontest: " + fail + " failure(s)");
         return fail;
     }
