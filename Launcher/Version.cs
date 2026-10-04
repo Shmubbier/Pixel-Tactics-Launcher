@@ -4,7 +4,7 @@ static class LauncherInfo
 {
     // Bump on every release; keep Launcher.csproj <Version> identical (the publish stage enforces it).
     // Semver: MAJOR.MINOR.PATCH -> N.0.0 big release, 0.N.0 major patch, 0.0.N bug fix.
-    public const string LauncherVersion = "1.0.0";
+    public const string LauncherVersion = "1.1.0";
 }
 
 // Minimal MAJOR.MINOR.PATCH value, tolerant of a leading "v". Pre-release/build suffixes are not used.
